@@ -7,7 +7,7 @@ use std::{
 };
 use futures::{
     prelude::*,
-    sync::mpsc::{channel, Sender},
+    sync::mpsc::{channel, Sender, Receiver},
 };
 use fnv::FnvHashMap;
 use tokio::codec::length_delimited::LengthDelimitedCodec;
@@ -21,44 +21,149 @@ use p2p::{
     SessionType,
 };
 
-#[derive(Default, Clone, Debug)]
-pub struct NodesAddressManager {
+pub const DEFAULT_KNOWN_NODES: &str = "0.0.0.0:1337";
+pub const DEFAULT_MAX_CONNECTS: usize = 4;
+pub const DEFAULT_PORT: usize = 4000;
 
-    //FIXME: It is better to use a channel?
-    pub addrs: FnvHashMap<RawAddr, i32>,
+pub struct NodesManager {
+    known_addrs: FnvHashMap<RawAddr, i32>,
+    connected_addrs: FnvHashMap<RawAddr, i32>,
+    max_connects: usize,
+    add_node_sender: Sender<NodesManagerData>,
+    add_node_receiver: Receiver<NodesManagerData>,
+}
+
+impl NodesManager {
+    pub fn new(known_addrs: FnvHashMap<RawAddr, i32>) -> Self {
+        let (tx, rx) = channel(8);
+
+        NodesManager {
+            known_addrs,
+            connected_addrs: FnvHashMap::default(),
+            max_connects: DEFAULT_MAX_CONNECTS,
+            add_node_sender: tx,
+            add_node_receiver: rx,
+        }
+    }
+
+    pub fn get_sender(&self) -> Sender<NodesManagerData> {
+        self.add_node_sender.clone()
+    }
+}
+
+impl Default for NodesManager {
+    fn default() -> NodesManager {
+        let (tx, rx) = channel(8);
+
+        NodesManager {
+            known_addrs: FnvHashMap::default(),
+            connected_addrs: FnvHashMap::default(),
+            max_connects: DEFAULT_MAX_CONNECTS,
+            add_node_sender: tx,
+            add_node_receiver: rx,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum ManagerCmd {
+    ADD_ADDRESS,
+    DEL_ADDRESS,
+    GET_RANDOM,
+}
+
+#[derive(Debug)]
+pub struct GetRandomAddrData {
+    num: usize,
+
+    // After get the random address, use data_channel sender them back immediately
+    data_channel: Sender<Vec<SocketAddr>>,
+}
+
+#[derive(Debug)]
+pub struct NodesManagerData {
+    cmd: ManagerCmd,
+    addr: Option<SocketAddr>,
+    get_random: Option<GetRandomAddrData>,
+
+}
+
+
+#[derive(Clone, Debug)]
+pub struct NodesAddressManager {
+    pub nodes_mgr_sender: Sender<NodesManagerData>,
 }
 
 impl AddressManager for NodesAddressManager {
     fn add_new(&mut self, addr: SocketAddr) {
 
         // Question: why this insert 100?
-        debug!("add node {:?} to manager", addr);
-        self.addrs.entry(RawAddr::from(addr)).or_insert(100);
+        debug!("add node {:?}:{} to manager", addr, addr.port());
+
+        let data = NodesManagerData {
+            cmd: ManagerCmd::ADD_ADDRESS,
+            addr: Some(addr),
+            get_random: None,
+        };
+
+        match self.nodes_mgr_sender.try_send(data) {
+            Ok(_) => {
+                debug!("Send substream success");
+            }
+            Err(err) => {
+                warn!("Send substream failed : {:?}", err);
+            }
+        }
     }
 
+    // Question: why we need this?
     fn misbehave(&mut self, addr: SocketAddr, ty: u64) -> i32 {
-        let value = self.addrs.entry(RawAddr::from(addr)).or_insert(100);
-        *value -= 20;
-        *value
+        unimplemented!()
     }
 
     fn get_random(&mut self, n: usize) -> Vec<SocketAddr> {
-        self.addrs
-            .keys()
-            .take(n)
-            .map(|addr| addr.socket_addr())
-            .collect()
+        let (tx, mut rx) = channel(8);
+        let data = NodesManagerData {
+            cmd: ManagerCmd::GET_RANDOM,
+            addr: None,
+            get_random: Some(GetRandomAddrData {num: n, data_channel: tx}),
+        };
+
+        match self.nodes_mgr_sender.try_send(data) {
+            Ok(_) => {
+                debug!("Send substream success");
+            }
+            Err(err) => {
+                warn!("Send substream failed : {:?}", err);
+            }
+        }
+
+        let mut ret = Vec::default();
+        if let Ok(Async::Ready(Some(t))) = rx.poll() {
+            ret = t;
+        }
+        ret
     }
 }
 
 // This handle will be shared with all protocol
-pub struct SHandle{}
+pub struct SHandle {
+    nodes_mgr_sender: Sender<NodesManagerData>,
+}
+
+impl SHandle {
+    pub fn new(sender: Sender<NodesManagerData>) -> Self {
+        SHandle {
+            nodes_mgr_sender: sender,
+        }
+    }
+}
 
 impl ServiceHandle for SHandle {
 
     // FIXME : when connect error, remove the node from node manager.
     fn handle_error(&mut self, env: &mut ServiceContext, error: ServiceEvent) {
-        unimplemented!()
+        debug!("service error: {:?}", error);
     }
 
     // Just a log here
