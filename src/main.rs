@@ -10,7 +10,9 @@ use futures::{
 };
 use std::{
     net::{SocketAddr, IpAddr, Ipv4Addr},
+    thread,
 };
+use crossbeam_channel;
 use futures::{
     prelude::*,
     sync::mpsc::{channel, Sender, Receiver},
@@ -35,26 +37,30 @@ fn main() {
 
     if std::env::args().nth(1) == Some("server".to_string()) {
         debug!("Starting server ......");
-        let node_mgr = create_nodes_manager(1);
+        let mut node_mgr = create_nodes_manager(1);
+
         let protocol_meta= create_meta(node_mgr.get_sender(), 0);
         let mut service = ServiceBuilder::default()
             .insert_protocol(protocol_meta)
             .forever(true)
             .build(SHandle::new(node_mgr.get_sender()));
         let _ = service.listen("0.0.0.0:1337".parse().unwrap());
+
+        thread::spawn(move || node_mgr.run());
         tokio::run(service.for_each(|_| Ok(())));
+
     } else {
         debug!("Starting client ......");
 
-        let node_mgr = create_nodes_manager(1);
-        let protocol_meta= create_meta(node_mgr.get_sender(), 0);
-
         let config_path = std::env::args().nth(2).unwrap_or("/Volumes/x/cryptape/gettingStart/rust/network-p2p/examples/config/config.toml".to_string());
-
         debug!("config path {:?}", config_path);
         let config = NetConfig::new(&config_path);
 
         debug!("network config is {:?}", config);
+
+        let mut node_mgr = NodesManager::from_config(config.clone());
+
+        let protocol_meta= create_meta(node_mgr.get_sender(), 0);
 
         let mut service = ServiceBuilder::default()
             .insert_protocol(protocol_meta)
@@ -73,7 +79,7 @@ fn main() {
         } else {
             service = service.dial(DEFAULT_KNOWN_NODES.parse().unwrap());
         }
-
+        thread::spawn(move || node_mgr.run());
         tokio::run(service.for_each(|_| Ok(())));
     }
     println!("Hello, world!");
@@ -89,7 +95,7 @@ fn create_nodes_manager(start: u16) -> NodesManager {
 
 }
 
-fn create_meta(sender: Sender<NodesManagerData>, id: usize) -> DiscoveryProtocolMeta {
+fn create_meta(sender: crossbeam_channel::Sender<NodesManagerData>, id: usize) -> DiscoveryProtocolMeta {
 
     let addr_mgr = NodesAddressManager{ nodes_mgr_sender: sender };
 

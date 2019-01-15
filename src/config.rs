@@ -12,7 +12,7 @@ pub struct NetConfig {
 #[derive(Debug, Deserialize, Clone)]
 pub struct NodeConfig {
     pub ip: Option<String>,
-    pub port: Option<u64>,
+    pub port: Option<usize>,
 }
 
 impl NetConfig {

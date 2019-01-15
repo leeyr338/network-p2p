@@ -4,10 +4,15 @@ use std::{
     net::{SocketAddr},
     collections::HashMap,
     time::Duration,
+    str::FromStr,
 };
 use futures::{
     prelude::*,
     sync::mpsc::{channel, Sender, Receiver},
+};
+use crossbeam_channel;
+use crossbeam_channel::{
+    unbounded, bounded,
 };
 use fnv::FnvHashMap;
 use tokio::codec::length_delimited::LengthDelimitedCodec;
@@ -20,6 +25,7 @@ use p2p::{
     session::{SessionId, ProtocolId},
     SessionType,
 };
+use crate::config::NetConfig;
 
 pub const DEFAULT_KNOWN_NODES: &str = "0.0.0.0:1337";
 pub const DEFAULT_MAX_CONNECTS: usize = 4;
@@ -29,13 +35,13 @@ pub struct NodesManager {
     known_addrs: FnvHashMap<RawAddr, i32>,
     connected_addrs: FnvHashMap<RawAddr, i32>,
     max_connects: usize,
-    add_node_sender: Sender<NodesManagerData>,
-    add_node_receiver: Receiver<NodesManagerData>,
+    add_node_sender: crossbeam_channel::Sender<NodesManagerData>,
+    add_node_receiver: crossbeam_channel::Receiver<NodesManagerData>,
 }
 
 impl NodesManager {
     pub fn new(known_addrs: FnvHashMap<RawAddr, i32>) -> Self {
-        let (tx, rx) = channel(8);
+        let (tx, rx) = unbounded();
 
         NodesManager {
             known_addrs,
@@ -46,14 +52,83 @@ impl NodesManager {
         }
     }
 
-    pub fn get_sender(&self) -> Sender<NodesManagerData> {
+    // FIXME: handle the error
+    pub fn from_config(cfg: NetConfig) -> Self {
+        let mut node_mgr = NodesManager::default();
+
+        let cfg_addrs = cfg.known_nodes.unwrap();
+        let max_connects = cfg.max_connects.unwrap();
+        node_mgr.max_connects = max_connects;
+
+        for addr in cfg_addrs {
+            let addr_str = format!("{}:{}", addr.ip.unwrap(), addr.port.unwrap());
+            let socket_addr = SocketAddr::from_str(&addr_str).unwrap();
+            let raw_addr = RawAddr::from(socket_addr);
+            node_mgr.known_addrs.insert(raw_addr, 100);
+        }
+
+        node_mgr
+
+    }
+
+    pub fn run(&mut self) {
+        loop {
+            for raw_addr in self.known_addrs.keys() {
+                debug!("Address in known: {:?}", raw_addr.socket_addr());
+            }
+            match self.add_node_receiver.recv() {
+                Ok(data) => {
+                    match data.cmd {
+                        ManagerCmd::ADD_ADDRESS => {
+                            let addr = data.addr.unwrap();
+                            self.known_addrs.entry(RawAddr::from(addr)).or_insert(100);
+                        },
+                        ManagerCmd::DEL_ADDRESS => {
+                            let addr = data.addr.unwrap();
+                            self.known_addrs.remove(&RawAddr::from(addr));
+                        },
+                        ManagerCmd::GET_RANDOM => {
+                            let get_random_data = data.get_random.unwrap();
+                            let n = get_random_data.num;
+                            let addrs = self.known_addrs
+                                . keys()
+                                .take(n)
+                                .map(|addr| addr.socket_addr())
+                                .collect();
+                            let mut sender = get_random_data.data_channel;
+                            match sender.try_send(addrs) {
+                                Ok(_) => {
+                                    debug!("Get random n addresses and send them success");
+                                }
+                                Err(err) => {
+                                    warn!("Get random n addresses, send them failed : {:?}", err);
+                                }
+                            }
+                        },
+                        ManagerCmd::ADD_CONNECTED => {
+                            let addr = data.addr.unwrap();
+                            self.connected_addrs.entry(RawAddr::from(addr)).or_insert(100);
+
+                            // If connected nodes less than MAX_CONNECTS, try to connect more nodes
+                            if self.connected_addrs.len() < self.max_connects {
+
+                            }
+                        }
+                    }
+                },
+                Err(err) => debug!("Err {:?}", err),
+            }
+        }
+    }
+
+    pub fn get_sender(&self) -> crossbeam_channel::Sender<NodesManagerData> {
         self.add_node_sender.clone()
     }
 }
 
 impl Default for NodesManager {
     fn default() -> NodesManager {
-        let (tx, rx) = channel(8);
+        let (tx, rx) = unbounded();
 
         NodesManager {
             known_addrs: FnvHashMap::default(),
@@ -70,6 +145,7 @@ pub enum ManagerCmd {
     ADD_ADDRESS,
     DEL_ADDRESS,
     GET_RANDOM,
+    ADD_CONNECTED,
 }
 
 #[derive(Debug)]
@@ -77,7 +153,7 @@ pub struct GetRandomAddrData {
     num: usize,
 
     // After get the random address, use data_channel sender them back immediately
-    data_channel: Sender<Vec<SocketAddr>>,
+    data_channel: crossbeam_channel::Sender<Vec<SocketAddr>>,
 }
 
 #[derive(Debug)]
@@ -91,7 +167,7 @@ pub struct NodesManagerData {
 
 #[derive(Clone, Debug)]
 pub struct NodesAddressManager {
-    pub nodes_mgr_sender: Sender<NodesManagerData>,
+    pub nodes_mgr_sender: crossbeam_channel::Sender<NodesManagerData>,
 }
 
 impl AddressManager for NodesAddressManager {
@@ -108,10 +184,10 @@ impl AddressManager for NodesAddressManager {
 
         match self.nodes_mgr_sender.try_send(data) {
             Ok(_) => {
-                debug!("Send substream success");
+                debug!("Send new address to nodes manager success");
             }
             Err(err) => {
-                warn!("Send substream failed : {:?}", err);
+                warn!("Send new address to nodes manager failed : {:?}", err);
             }
         }
     }
@@ -122,7 +198,7 @@ impl AddressManager for NodesAddressManager {
     }
 
     fn get_random(&mut self, n: usize) -> Vec<SocketAddr> {
-        let (tx, mut rx) = channel(8);
+        let (tx, mut rx) = bounded(1);
         let data = NodesManagerData {
             cmd: ManagerCmd::GET_RANDOM,
             addr: None,
@@ -131,28 +207,27 @@ impl AddressManager for NodesAddressManager {
 
         match self.nodes_mgr_sender.try_send(data) {
             Ok(_) => {
-                debug!("Send substream success");
+                debug!("Send message to address manager to get n random address Success");
             }
             Err(err) => {
-                warn!("Send substream failed : {:?}", err);
+                warn!("Send message to address manager to get n random address failed : {:?}", err);
             }
         }
 
-        let mut ret = Vec::default();
-        if let Ok(Async::Ready(Some(t))) = rx.poll() {
-            ret = t;
-        }
+        let mut ret: Vec<SocketAddr> = Vec::default();
+        let ret = rx.recv().unwrap();
+        debug!("Get address : {:?}", ret);
         ret
     }
 }
 
 // This handle will be shared with all protocol
 pub struct SHandle {
-    nodes_mgr_sender: Sender<NodesManagerData>,
+    nodes_mgr_sender: crossbeam_channel::Sender<NodesManagerData>,
 }
 
 impl SHandle {
-    pub fn new(sender: Sender<NodesManagerData>) -> Self {
+    pub fn new(sender: crossbeam_channel::Sender<NodesManagerData>) -> Self {
         SHandle {
             nodes_mgr_sender: sender,
         }
@@ -161,14 +236,62 @@ impl SHandle {
 
 impl ServiceHandle for SHandle {
 
-    // FIXME : when connect error, remove the node from node manager.
     fn handle_error(&mut self, env: &mut ServiceContext, error: ServiceEvent) {
-        debug!("service error: {:?}", error);
+        match error {
+            ServiceEvent::DialerError{ address, error } => {
+                let data = NodesManagerData {
+                    cmd: ManagerCmd::DEL_ADDRESS,
+                    addr: Some(address),
+                    get_random: None,
+                };
+                match self.nodes_mgr_sender.try_send(data) {
+                    Ok(_) => {
+                        debug!("Send message to address manager to delete address Success");
+                    }
+                    Err(err) => {
+                        warn!("Send message to address manager to delete address failed : {:?}", err);
+                    }
+                }
+                warn!("Error in {:?} : {:?}, delete this address from nodes manager", address, error);
+            },
+            _ => unimplemented!(),
+        }
+
     }
 
-    // Just a log here
+    // Question: this will be called every session open?
     fn handle_event(&mut self, env: &mut ServiceContext, event: ServiceEvent) {
-        debug!("service event: {:?}", event);
+        match event {
+            ServiceEvent::SessionOpen {
+                id,
+                address,
+                ty,
+                public_key,
+            } => {
+                debug!("Service open on : {:?}, session id: {:?}", address, id);
+
+                if ty == SessionType::Client {
+
+                    // FIXME: this logic should be a function
+                    let data = NodesManagerData {
+                        cmd: ManagerCmd::ADD_CONNECTED,
+                        addr: Some(address),
+                        get_random: None,
+                    };
+                    match self.nodes_mgr_sender.try_send(data) {
+                        Ok(_) => {
+                            debug!("Send message to address manager to delete address Success");
+                        }
+                        Err(err) => {
+                            warn!("Send message to address manager to delete address failed : {:?}", err);
+                        }
+                    }
+                    warn!("Error in {:?} : {:?}, delete this address from nodes manager", address, error);
+                }
+            },
+            _ => unimplemented!(),
+        }
+
     }
 }
 
@@ -206,11 +329,6 @@ impl ServiceProtocol for DiscoveryProtocol {
     fn init(&mut self, control: &mut ServiceContext) {
         debug!("protocol [discovery({})]: init", self.id);
 
-        let interval = Duration::from_secs(5);
-        debug!("Setup interval {:?}", interval);
-
-        // why we need a notify?
-        control.set_notify(self.id, interval, 3);
         let discovery_task = self
             .discovery
             .take()
