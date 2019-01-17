@@ -1,0 +1,12 @@
+
+port = 4000
+
+max_connects = 4
+
+[[known_nodes]]
+    ip = "0.0.0.0"
+    port = 1337
+
+[[known_nodes]]
+    ip = "0.0.0.0"
+    port = 4002
