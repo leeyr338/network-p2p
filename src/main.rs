@@ -27,7 +27,9 @@ use crate::connection::{
 };
 
 use p2p::{
+    multiaddr::{ Multiaddr, ToMultiaddr },
     builder::ServiceBuilder,
+    SecioKeyPair,
 };
 
 //include!(concat!(env!("OUT_DIR"), "./build_info.rs"));
@@ -43,8 +45,9 @@ fn main() {
         let mut service = ServiceBuilder::default()
             .insert_protocol(protocol_meta)
             .forever(true)
+            .key_pair(SecioKeyPair::secp256k1_generated())
             .build(SHandle::new(node_mgr.get_sender()));
-        let _ = service.listen("0.0.0.0:1337".parse().unwrap());
+        let _ = service.listen(&"/ip4/0.0.0.0/tcp/1337".parse().unwrap());
 
         thread::spawn(move || node_mgr.run());
         tokio::run(service.for_each(|_| Ok(())));
@@ -65,28 +68,21 @@ fn main() {
         let mut service = ServiceBuilder::default()
             .insert_protocol(protocol_meta)
             .forever(true)
+            .key_pair(SecioKeyPair::secp256k1_generated())
             .build(SHandle::new(node_mgr.get_sender()));
-        let addr = format!("0.0.0.0:{}", config.port.unwrap_or(DEFAULT_PORT));
+        let addr = format!("/ip4/0.0.0.0/tcp/{}", config.port.unwrap_or(DEFAULT_PORT));
 
-        let _ = service.listen(addr.parse().unwrap());
+        let _ = service.listen(&addr.parse().unwrap());
 
-        // Dial all known nodes
-        if let Some(known_nodes) = config.known_nodes {
-            for node in known_nodes.iter() {
-                let addr = format!("{}:{}", node.clone().ip.unwrap(), node.clone().port.unwrap());
-                service = service.dial(addr.parse().unwrap());
-            }
-        } else {
-            service = service.dial(DEFAULT_KNOWN_NODES.parse().unwrap());
-        }
         thread::spawn(move || node_mgr.run());
+        service = service.dial("/ip4/0.0.0.0/tcp/1337".parse().unwrap());
         tokio::run(service.for_each(|_| Ok(())));
     }
     println!("Hello, world!");
 }
 
 fn create_nodes_manager(start: u16) -> NodesManager {
-    let addrs: FnvHashMap<RawAddr, i32> = (start..start + 10)
+    let addrs: FnvHashMap<RawAddr, i32> = (start..start + 3)
         .map(|port| SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), port))
         .map(|addr| (RawAddr::from(addr), 100))
         .collect();
