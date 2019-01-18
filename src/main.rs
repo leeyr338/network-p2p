@@ -22,7 +22,7 @@ use util::micro_service_init;
 use discovery::{RawAddr};
 use crate::config::NetConfig;
 use crate::connection::{
-    DiscoveryProtocolMeta, SHandle, NodesAddressManager, DEFAULT_PORT, DEFAULT_KNOWN_NODES,
+    DiscoveryProtocolMeta, SHandle, NodesAddressManager, DEFAULT_PORT,
     NodesManager, NodesManagerData,
 };
 
@@ -37,58 +37,28 @@ use p2p::{
 fn main() {
     env_logger::init();
 
-    if std::env::args().nth(1) == Some("server".to_string()) {
-        debug!("Starting server ......");
-        let mut node_mgr = create_nodes_manager(1);
+    let config_path = std::env::args().nth(1).unwrap_or("/Volumes/x/cryptape/gettingStart/rust/network-p2p/examples/config/1_node.toml".to_string());
+    debug!("config path {:?}", config_path);
+    let config = NetConfig::new(&config_path);
 
-        let protocol_meta= create_meta(node_mgr.get_sender(), 0);
-        let mut service = ServiceBuilder::default()
-            .insert_protocol(protocol_meta)
-            .forever(true)
-            .key_pair(SecioKeyPair::secp256k1_generated())
-            .build(SHandle::new(node_mgr.get_sender()));
-        let _ = service.listen(&"/ip4/0.0.0.0/tcp/1337".parse().unwrap());
+    debug!("network config is {:?}", config);
 
-        thread::spawn(move || node_mgr.run());
-        tokio::run(service.for_each(|_| Ok(())));
+    let mut node_mgr = NodesManager::from_config(config.clone());
 
-    } else {
-        debug!("Starting client ......");
+    let protocol_meta= create_meta(node_mgr.get_sender(), 0);
 
-        let config_path = std::env::args().nth(2).unwrap_or("/Volumes/x/cryptape/gettingStart/rust/network-p2p/examples/config/config.toml".to_string());
-        debug!("config path {:?}", config_path);
-        let config = NetConfig::new(&config_path);
+    let mut service = ServiceBuilder::default()
+        .insert_protocol(protocol_meta)
+        .forever(true)
+        .key_pair(SecioKeyPair::secp256k1_generated())
+        .build(SHandle::new(node_mgr.get_sender()));
+    let addr = format!("/ip4/127.0.0.1/tcp/{}", config.port.unwrap_or(DEFAULT_PORT));
 
-        debug!("network config is {:?}", config);
+    let _ = service.listen(&addr.parse().unwrap());
 
-        let mut node_mgr = NodesManager::from_config(config.clone());
-
-        let protocol_meta= create_meta(node_mgr.get_sender(), 0);
-
-        let mut service = ServiceBuilder::default()
-            .insert_protocol(protocol_meta)
-            .forever(true)
-            .key_pair(SecioKeyPair::secp256k1_generated())
-            .build(SHandle::new(node_mgr.get_sender()));
-        let addr = format!("/ip4/0.0.0.0/tcp/{}", config.port.unwrap_or(DEFAULT_PORT));
-
-        let _ = service.listen(&addr.parse().unwrap());
-
-        thread::spawn(move || node_mgr.run());
-        service = service.dial("/ip4/0.0.0.0/tcp/1337".parse().unwrap());
-        tokio::run(service.for_each(|_| Ok(())));
-    }
-    println!("Hello, world!");
-}
-
-fn create_nodes_manager(start: u16) -> NodesManager {
-    let addrs: FnvHashMap<RawAddr, i32> = (start..start + 3)
-        .map(|port| SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), port))
-        .map(|addr| (RawAddr::from(addr), 100))
-        .collect();
-
-    NodesManager::new(addrs)
-
+    node_mgr.set_service_task_sender(service.control().clone());
+    thread::spawn(move || node_mgr.run());
+    tokio::run(service.for_each(|_| Ok(())));
 }
 
 fn create_meta(sender: crossbeam_channel::Sender<NodesManagerData>, id: usize) -> DiscoveryProtocolMeta {

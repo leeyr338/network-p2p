@@ -7,10 +7,10 @@ edition = "2018"
 [dependencies]
 fnv = "1.0.6"
 log = "0.4"
-#discovery = { git = "https://github.com/driftluo/p2p.git" }
-#p2p = { git = "https://github.com/driftluo/p2p.git" }
-p2p = { path = "/Volumes/x/cryptape/code/p2p"}
-discovery = { path = "/Volumes/x/cryptape/code/p2p/discovery" }
+discovery = { git = "https://github.com/driftluo/p2p.git" }
+p2p = { git = "https://github.com/driftluo/p2p.git" }
+#p2p = { path = "/Volumes/x/cryptape/code/p2p"}
+#discovery = { path = "/Volumes/x/cryptape/code/p2p/discovery" }
 tokio = "0.1.14"
 futures = "0.1.25"
 env_logger = "0.6.0"

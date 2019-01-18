@@ -1,10 +1,12 @@
 
 use log::{debug, warn};
 use std::{
-    net::{SocketAddr},
+    net::{ SocketAddr },
     collections::HashMap,
-    time::Duration,
+    time::{ Duration, Instant },
     str::FromStr,
+    io::{Error, ErrorKind},
+
 };
 use futures::{
     prelude::*,
@@ -12,54 +14,65 @@ use futures::{
 };
 use crossbeam_channel;
 use crossbeam_channel::{
-    unbounded, bounded,
+    unbounded, bounded, tick, select,
 };
 use fnv::FnvHashMap;
 use tokio::codec::length_delimited::LengthDelimitedCodec;
 use discovery::{RawAddr, AddressManager, Discovery, DiscoveryHandle, Direction, Substream};
 use p2p::{
-    multiaddr::{Multiaddr, ToMultiaddr},
-    service::{
-        ProtocolHandle, ServiceHandle, ServiceContext, ServiceEvent, ProtocolMeta, ServiceProtocol,
-        SessionContext, ServiceTask, multiaddr_to_socketaddr,
+    ProtocolId, SessionId, SessionType,
+    context::{
+        ServiceContext, SessionContext, ServiceControl,
     },
-    session::{SessionId, ProtocolId},
-    SessionType,
+    multiaddr::{
+        Multiaddr, ToMultiaddr
+    },
+    traits::{
+        ProtocolMeta, ServiceProtocol, ServiceHandle,
+    },
+    utils::multiaddr_to_socketaddr,
+    service::{
+        ServiceEvent, ServiceTask,
+    },
+    error,
 };
-use crate::config::NetConfig;
+use crate::config::{
+    NetConfig, NodeConfig,
+};
 
-pub const DEFAULT_KNOWN_NODES: &str = "0.0.0.0:1337";
+pub const DEFAULT_KNOWN_IP: &str = "127.0.0.1";
+pub const DEFAULT_KNOWN_PORT: usize = 1337;
 pub const DEFAULT_MAX_CONNECTS: usize = 4;
 pub const DEFAULT_PORT: usize = 4000;
+pub const CHECK_CONNECTED_NODES: Duration = Duration::from_secs(3);
 
 pub struct NodesManager {
+    check_connected_nodes: crossbeam_channel::Receiver<Instant>,
     known_addrs: FnvHashMap<RawAddr, i32>,
-    connected_addrs: FnvHashMap<RawAddr, i32>,
+    connected_addrs: HashMap<SessionId, RawAddr>,
     max_connects: usize,
     add_node_sender: crossbeam_channel::Sender<NodesManagerData>,
     add_node_receiver: crossbeam_channel::Receiver<NodesManagerData>,
-    service_task_sender: Option<Sender<ServiceTask>>,
+    service_ctrl: Option<ServiceControl>,
 }
 
 impl NodesManager {
     pub fn new(known_addrs: FnvHashMap<RawAddr, i32>) -> Self {
-        let (tx, rx) = unbounded();
-
-        NodesManager {
-            known_addrs,
-            connected_addrs: FnvHashMap::default(),
-            max_connects: DEFAULT_MAX_CONNECTS,
-            add_node_sender: tx,
-            add_node_receiver: rx,
-            service_task_sender: None,
-        }
+        let mut node_mgr = NodesManager::default();
+        node_mgr.known_addrs = known_addrs;
+        node_mgr
     }
 
     // FIXME: handle the error
     pub fn from_config(cfg: NetConfig) -> Self {
         let mut node_mgr = NodesManager::default();
 
-        let cfg_addrs = cfg.known_nodes.unwrap();
+        let cfg_addrs = cfg.known_nodes
+            .unwrap_or(vec!(NodeConfig {
+                ip: Some(DEFAULT_KNOWN_IP.to_owned()),
+                port: Some(DEFAULT_KNOWN_PORT),
+            }));
+
         let max_connects = cfg.max_connects.unwrap();
         node_mgr.max_connects = max_connects;
 
@@ -75,62 +88,64 @@ impl NodesManager {
     }
 
     pub fn run(&mut self) {
-        loop {
-            match self.add_node_receiver.recv() {
-                Ok(data) => {
-                    let mut connect_new_node = false;
-                    match data.cmd {
-                        ManagerCmd::ADD_ADDRESS => {
-                            let addr = data.addr.unwrap();
-                            self.known_addrs.entry(RawAddr::from(addr)).or_insert(100);
-                            connect_new_node = true;
-                        },
-                        ManagerCmd::DEL_ADDRESS => {
 
-                            // Connected failed!
-                            let addr = data.addr.unwrap();
-                            self.known_addrs.remove(&RawAddr::from(addr));
-                            connect_new_node = true;
-                        },
-                        ManagerCmd::GET_RANDOM => {
-                            let get_random_data = data.get_random.unwrap();
-                            let n = get_random_data.num;
-                            let addrs = self.known_addrs
-                                .keys()
-                                .take(n)
-                                .map(|addr| addr.socket_addr())
-                                .collect();
-                            let sender = get_random_data.data_channel;
-                            match sender.try_send(addrs) {
-                                Ok(_) => {
-                                    debug!("Get random n addresses and send them success");
+        loop {
+            select! {
+                recv(self.add_node_receiver) -> msg => {
+                    match msg {
+                        Ok(data) => {
+                            match data.cmd {
+                                ManagerCmd::ADD_ADDRESS => {
+                                    let addr = data.addr.unwrap();
+                                    self.known_addrs.entry(RawAddr::from(addr)).or_insert(100);
+                                },
+                                ManagerCmd::DEL_ADDRESS => {
+
+                                    // Connected failed!
+                                    let addr = data.addr.unwrap();
+                                    self.known_addrs.remove(&RawAddr::from(addr));
+                                },
+                                ManagerCmd::GET_RANDOM => {
+                                    let get_random_data = data.get_random.unwrap();
+                                    let n = get_random_data.num;
+                                    let addrs = self.known_addrs
+                                        .keys()
+                                        .take(n)
+                                        .map(|addr| addr.socket_addr())
+                                        .collect();
+                                    let sender = get_random_data.data_channel;
+                                    match sender.try_send(addrs) {
+                                        Ok(_) => {
+                                            debug!("Get random n addresses and send them success");
+                                        }
+                                        Err(err) => {
+                                            warn!("Get random n addresses, send them failed : {:?}", err);
+                                        }
+                                    }
+                                },
+                                ManagerCmd::ADD_CONNECTED => {
+                                    //FIXME: If have reached to max_connects, deconnected this node.
+                                    // Connect success!
+                                    let addr = data.addr.unwrap();
+                                    let id = data.session_id.unwrap_or(1);
+                                    self.connected_addrs.insert(id, RawAddr::from(addr));
                                 }
-                                Err(err) => {
-                                    warn!("Get random n addresses, send them failed : {:?}", err);
+                                ManagerCmd::DEL_CONNECTED => {
+                                    //FIXME: If have reached to max_connects, deconnected this node.
+                                    // Connect success!
+                                    let id = data.session_id.unwrap_or(1);
+                                    self.connected_addrs.remove(&id);
                                 }
                             }
                         },
-                        ManagerCmd::ADD_CONNECTED => {
-
-                            // Connect success!
-                            let addr = data.addr.unwrap();
-                            self.connected_addrs.entry(RawAddr::from(addr)).or_insert(100);
-                            connect_new_node = true;
-                        }
-                        ManagerCmd::INIT_SERVICE_TASK_SENDER => {
-                            self.service_task_sender = data.service_task_sender;
-
-                            debug!("Init Service task sender in node manager.")
-                        }
+                        Err(err) => debug!("Err {:?}", err),
                     }
-
-                    // If connected nodes less than MAX_CONNECTS, try to connect more nodes
-                    if connect_new_node {
-                        self.dial_nodes();
-                    }
-                },
-                Err(err) => debug!("Err {:?}", err),
+                }
+                recv(self.check_connected_nodes) -> _ => {
+                    self.dial_nodes();
+                }
             }
+
         }
     }
 
@@ -140,51 +155,54 @@ impl NodesManager {
 
     pub fn dial_nodes(&self) {
         // FIXME: If there are no addrs in known_addrs, dial a default address.
-//        debug!("=============================");
-//        for raw_addr in self.known_addrs.keys() {
-//            debug!("Address in known: {:?}", raw_addr.socket_addr());
-//        }
-//        debug!("-----------------------------");
-//        for raw_addr in self.connected_addrs.keys() {
-//            debug!("Address in connected: {:?}", raw_addr.socket_addr());
-//        }
-//        debug!("=============================");
+        debug!("=============================");
+        for raw_addr in self.known_addrs.keys() {
+            debug!("Address in known: {:?}", raw_addr.socket_addr());
+        }
+        debug!("-----------------------------");
+        for raw_addr in self.connected_addrs.values() {
+            debug!("Address in connected: {:?}", raw_addr.socket_addr());
+        }
+        debug!("=============================");
         if self.connected_addrs.len() < self.max_connects {
             for key in self.known_addrs.keys() {
-                if false == self.connected_addrs.contains_key(key) {
+                 if false == self.connected_addrs.values().any(|value| *value == *key) {
+                     debug!("[dial_nodes] Connect to {:?}", key.socket_addr());
 
-                    debug!("Connect to {:?}", key.socket_addr());
-
-                    let service_task = ServiceTask::Dial { address: key.socket_addr().to_multiaddr().unwrap() };
-
-                    if let Some(task_sender) = &self.service_task_sender {
-                        match task_sender.clone().try_send(service_task) {
-                            Ok(_) => {
-                                debug!("Send dial success");
-                            }
-                            Err(err) => {
-                                warn!("Send dial failed : {:?}", err);
-                            }
-                        }
-                    }
-                    break;
+                     // FIXME: Do not use ctrl.clone later.
+                     if let Some(ctrl) = &self.service_ctrl {
+                         match ctrl.clone().dial(key.socket_addr().to_multiaddr().unwrap()) {
+                             Ok(_) => {
+                                 debug!("[dial_nodes] Dail success");
+                             }
+                             Err(err) => {
+                                 warn!("[dial_nodes] Dail failed : {:?}", err);
+                             }
+                         }
+                     }
+                     break;
                 }
             }
         }
+    }
+
+    pub fn set_service_task_sender(&mut self, ctrl: ServiceControl) {
+        self.service_ctrl = Some(ctrl);
     }
 }
 
 impl Default for NodesManager {
     fn default() -> NodesManager {
         let (tx, rx) = unbounded();
-
+        let ticker = tick(CHECK_CONNECTED_NODES);
         NodesManager {
+            check_connected_nodes: ticker,
             known_addrs: FnvHashMap::default(),
-            connected_addrs: FnvHashMap::default(),
+            connected_addrs: HashMap::default(),
             max_connects: DEFAULT_MAX_CONNECTS,
             add_node_sender: tx,
             add_node_receiver: rx,
-            service_task_sender: None,
+            service_ctrl: None,
         }
     }
 }
@@ -195,7 +213,7 @@ pub enum ManagerCmd {
     DEL_ADDRESS,
     GET_RANDOM,
     ADD_CONNECTED,
-    INIT_SERVICE_TASK_SENDER,
+    DEL_CONNECTED,
 }
 
 #[derive(Debug)]
@@ -212,6 +230,7 @@ pub struct NodesManagerData {
     addr: Option<SocketAddr>,
     get_random: Option<GetRandomAddrData>,
     service_task_sender: Option<Sender<ServiceTask>>,
+    session_id: Option<SessionId>,
 }
 
 
@@ -222,9 +241,7 @@ pub struct NodesAddressManager {
 
 impl AddressManager for NodesAddressManager {
     fn add_new(&mut self, addr: Multiaddr) {
-        debug!("=====add_new  begin=====");
         let addr = multiaddr_to_socketaddr(&addr).unwrap();
-        // Question: why this insert 100?
         debug!("add node {:?}:{} to manager", addr, addr.port());
 
         let data = NodesManagerData {
@@ -232,6 +249,7 @@ impl AddressManager for NodesAddressManager {
             addr: Some(addr),
             get_random: None,
             service_task_sender: None,
+            session_id: None,
         };
 
         match self.nodes_mgr_sender.try_send(data) {
@@ -242,7 +260,6 @@ impl AddressManager for NodesAddressManager {
                 warn!("Send new address to nodes manager failed : {:?}", err);
             }
         }
-        debug!("=====add_new  end=====");
     }
 
     // Question: why we need this?
@@ -251,13 +268,13 @@ impl AddressManager for NodesAddressManager {
     }
 
     fn get_random(&mut self, n: usize) -> Vec<Multiaddr> {
-        debug!("=====get_random  begin=====");
         let (tx, mut rx) = unbounded();
         let data = NodesManagerData {
             cmd: ManagerCmd::GET_RANDOM,
             addr: None,
             get_random: Some(GetRandomAddrData {num: n, data_channel: tx}),
             service_task_sender: None,
+            session_id: None,
         };
 
         match self.nodes_mgr_sender.try_send(data) {
@@ -272,7 +289,6 @@ impl AddressManager for NodesAddressManager {
         let mut ret: Vec<SocketAddr> = Vec::default();
         let ret = rx.recv().unwrap();
         debug!("Get address : {:?}", ret);
-        debug!("=====get_random  end=====");
         ret.into_iter()
             .map(|addr| addr.to_multiaddr().unwrap())
             .collect()
@@ -296,36 +312,60 @@ impl SHandle {
 impl ServiceHandle for SHandle {
 
     fn handle_error(&mut self, env: &mut ServiceContext, error: ServiceEvent) {
-        debug!("=====handle_error  begin=====");
         debug!("return error {:?}", error);
         match error {
             ServiceEvent::DialerError{ address, error } => {
                 let address = multiaddr_to_socketaddr(&address).unwrap();
-                let data = NodesManagerData {
-                    cmd: ManagerCmd::DEL_ADDRESS,
-                    addr: Some(address),
-                    get_random: None,
-                    service_task_sender: None,
-                };
-                match self.nodes_mgr_sender.try_send(data) {
-                    Ok(_) => {
-                        debug!("Send message to address manager to delete address Success");
-                    }
-                    Err(err) => {
-                        warn!("Send message to address manager to delete address failed : {:?}", err);
+
+                // If dial to a connected node, need add it to connected address list.
+                // FIXME: Use a new error kind to distinguish the `Connected to the connected node`
+                match error {
+                    error::Error::RepeatedConnection(session_id) => {
+                        let data = NodesManagerData {
+                            cmd: ManagerCmd::ADD_CONNECTED,
+                            addr: Some(address),
+                            get_random: None,
+                            service_task_sender: None,
+                            session_id: Some(session_id),
+                        };
+                        match self.nodes_mgr_sender.try_send(data) {
+                            Ok(_) => {
+                                debug!("[handle_event] Send message to address manager to delete address Success");
+                            }
+                            Err(err) => {
+                                warn!("[handle_envent] Send message to address manager to delete address failed : {:?}", err);
+                            }
+                        }
+
+                        debug!("Connected to the same node : {:?}", address);
+                    },
+                    _ => {
+                        let data = NodesManagerData {
+                            cmd: ManagerCmd::DEL_ADDRESS,
+                            addr: Some(address),
+                            get_random: None,
+                            service_task_sender: None,
+                            session_id: None,
+                        };
+                        match self.nodes_mgr_sender.try_send(data) {
+                            Ok(_) => {
+                                debug!("Send message to address manager to delete address Success");
+                            }
+                            Err(err) => {
+                                warn!("Send message to address manager to delete address failed : {:?}", err);
+                            }
+                        }
+                        warn!("Error in {:?} : {:?}, delete this address from nodes manager", address, error);
                     }
                 }
-                warn!("Error in {:?} : {:?}, delete this address from nodes manager", address, error);
             },
 
-            _ => unimplemented!(),
+            _ => (),
         }
-        debug!("=====handle_error  end=====");
     }
 
     // Question: this will be called every session open?
     fn handle_event(&mut self, env: &mut ServiceContext, event: ServiceEvent) {
-        debug!("=====handle_event  begin=====");
         match event {
             ServiceEvent::SessionOpen {
                 id,
@@ -334,31 +374,30 @@ impl ServiceHandle for SHandle {
                 public_key,
             } => {
                 let address = multiaddr_to_socketaddr(&address).unwrap();
-                debug!("Service open on : {:?}, session id: {:?}", address, id);
+                debug!("[handle_event] Service open on : {:?}, session id: {:?}, ty: {:?}", address, id, ty);
                 if ty == SessionType::Client {
-
+                    debug!("[handle_event] ty == Client");
                     // FIXME: this logic should be a function
                     let data = NodesManagerData {
                         cmd: ManagerCmd::ADD_CONNECTED,
                         addr: Some(address),
                         get_random: None,
                         service_task_sender: None,
+                        session_id: None,
                     };
                     match self.nodes_mgr_sender.try_send(data) {
                         Ok(_) => {
-                            debug!("Send message to address manager to delete address Success");
+                            debug!("[handle_event] Send message to address manager to delete address Success");
                         }
                         Err(err) => {
-                            warn!("Send message to address manager to delete address failed : {:?}", err);
+                            warn!("[handle_envent] Send message to address manager to delete address failed : {:?}", err);
                         }
                     }
-                    warn!("Error in dialing {:?}, delete this address from nodes manager", address);
                 }
 
             },
-            _ => unimplemented!(),
+            _ => (),
         }
-        debug!("=====handle_event  end=====");
     }
 }
 
@@ -395,24 +434,7 @@ pub struct DiscoveryProtocol {
 
 impl ServiceProtocol for DiscoveryProtocol {
     fn init(&mut self, control: &mut ServiceContext) {
-        debug!("=====Service protocol init  begin =====");
         debug!("protocol [discovery({})]: init", self.id);
-
-        // Send service task sender to Node manager.
-        let data = NodesManagerData {
-            cmd: ManagerCmd::INIT_SERVICE_TASK_SENDER,
-            addr: None,
-            get_random: None,
-            service_task_sender: Some(control.sender().clone()),
-        };
-        match self.nodes_mgr_sender.try_send(data) {
-            Ok(_) => {
-                debug!("Send init service task sender Success");
-            }
-            Err(err) => {
-                warn!("Send init service task sender failed : {:?}", err);
-            }
-        }
 
         let discovery_task = self
             .discovery
@@ -435,12 +457,10 @@ impl ServiceProtocol for DiscoveryProtocol {
             })
             .unwrap();
         control.future_task(discovery_task);
-        debug!("=====Service protocol init  end =====");
     }
 
     // open a discovery protocol session?
     fn connected(&mut self, control: &mut ServiceContext, session: &SessionContext, _: &str) {
-        debug!("=====Service protocol connected  begin =====");
         self.sessions
             .entry(session.id)
             .or_insert(SessionData::new(session.address.clone(), session.ty));
@@ -465,7 +485,7 @@ impl ServiceProtocol for DiscoveryProtocol {
             self.id,
             session.id,
             receiver,
-            control.sender().clone(),
+            control.control().clone(),
             control.listens(),
         );
 
@@ -477,19 +497,33 @@ impl ServiceProtocol for DiscoveryProtocol {
                 warn!("Send substream failed: {:?}", err);
             }
         }
-        debug!("=====Service protocol connected  end =====");
     }
 
     fn disconnected(&mut self, control: &mut ServiceContext, session: &SessionContext) {
-        debug!("=====Service protocol disconnected  begin =====");
         self.sessions.remove(&session.id);
         self.discovery_senders.remove(&session.id);
         debug!("protocol [discovery] close on session [{}]", session.id);
-        debug!("=====Service protocol disconnected  end =====");
+
+        let address = multiaddr_to_socketaddr(&session.address).unwrap();
+        debug!("[disconnected] address : {:?}", address);
+        let data = NodesManagerData {
+            cmd: ManagerCmd::DEL_CONNECTED,
+            addr: Some(address),
+            get_random: None,
+            service_task_sender: None,
+            session_id: Some(session.id),
+        };
+        match self.nodes_mgr_sender.try_send(data) {
+            Ok(_) => {
+                debug!("Send message to address manager to delete address Success");
+            }
+            Err(err) => {
+                warn!("Send message to address manager to delete address failed : {:?}", err);
+            }
+        }
     }
 
     fn received(&mut self, control: &mut ServiceContext, session: &SessionContext, data: Vec<u8>) {
-        debug!("=====Service protocol received  begin =====");
         debug!("[received message]: length={}", data.len());
         self.sessions
             .get_mut(&session.id)
@@ -506,15 +540,12 @@ impl ServiceProtocol for DiscoveryProtocol {
                 }
             }
         }
-        debug!("=====Service protocol received  end =====");
 
     }
 
     fn notify(&mut self, control: &mut ServiceContext, token: u64) {
-        debug!("=====Service protocol notify  begin =====");
         debug!("protocol [discovery] received notify token: {}", token);
         self.notify_counter += 1;
-        debug!("=====Service protocol notify  end =====");
     }
 }
 
