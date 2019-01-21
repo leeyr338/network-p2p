@@ -1,35 +1,35 @@
 
 pub mod connection;
 pub mod config;
+pub mod p2p_protocol;
+pub mod node_manager;
 
 use env_logger;
-use fnv::FnvHashMap;
 use log::{debug};
 use futures::{
     prelude::*,
 };
 use std::{
-    net::{SocketAddr, IpAddr, Ipv4Addr},
     thread,
 };
 use crossbeam_channel;
-use futures::{
-    prelude::*,
-    sync::mpsc::{channel, Sender, Receiver},
-};
-use clap::App;
-use util::micro_service_init;
-use discovery::{RawAddr};
-use crate::config::NetConfig;
-use crate::connection::{
-    DiscoveryProtocolMeta, SHandle, NodesAddressManager, DEFAULT_PORT,
-    NodesManager, NodesManagerData,
-};
 
 use p2p::{
-    multiaddr::{ Multiaddr, ToMultiaddr },
     builder::ServiceBuilder,
     SecioKeyPair,
+};
+
+use crate::config::NetConfig;
+
+use crate::p2p_protocol::{
+    SHandle,
+    node_discovery::{
+        DiscoveryProtocolMeta, NodesAddressManager,
+    },
+};
+
+use crate::node_manager::{
+    NodesManager, DEFAULT_PORT, NodesManagerData,
 };
 
 //include!(concat!(env!("OUT_DIR"), "./build_info.rs"));
