@@ -25,7 +25,7 @@ use p2p::{
         ToMultiaddr
     },
     service::{
-        ServiceTask,
+        ServiceTask, Message,
     },
 };
 use crate::config::{
@@ -157,6 +157,13 @@ impl NodesManager {
             debug!("Address in connected: {:?}", raw_addr.socket_addr());
         }
         debug!("=============================");
+
+        let  msg = Message {
+            session_id: 0,
+            proto_id: 1,
+            data: b"Hello world".to_vec(),
+        };
+        self.service_ctrl.clone().unwrap().send_message(None, msg);
         if self.connected_addrs.len() < self.max_connects {
             for key in self.known_addrs.keys() {
                 if false == self.connected_addrs.values().any(|value| *value == *key) {

@@ -1,8 +1,8 @@
 
-pub mod connection;
 pub mod config;
 pub mod p2p_protocol;
 pub mod node_manager;
+pub mod network;
 
 use env_logger;
 use log::{debug};
@@ -26,10 +26,17 @@ use crate::p2p_protocol::{
     node_discovery::{
         DiscoveryProtocolMeta, NodesAddressManager,
     },
+    transfer::{
+        TransferProtocolMeta,
+    }
 };
 
 use crate::node_manager::{
     NodesManager, DEFAULT_PORT, NodesManagerData,
+};
+
+use crate::network::{
+    Network,
 };
 
 //include!(concat!(env!("OUT_DIR"), "./build_info.rs"));
@@ -44,11 +51,14 @@ fn main() {
     debug!("network config is {:?}", config);
 
     let mut node_mgr = NodesManager::from_config(config.clone());
+    let mut network_mgr = Network::new();
 
-    let protocol_meta= create_meta(node_mgr.get_sender(), 0);
+    let discovery_meta= create_meta(node_mgr.get_sender(), 0);
+    let transfer_meta = TransferProtocolMeta::new(1, network_mgr.get_sender());
 
     let mut service = ServiceBuilder::default()
-        .insert_protocol(protocol_meta)
+        .insert_protocol(discovery_meta)
+        .insert_protocol(transfer_meta)
         .forever(true)
         .key_pair(SecioKeyPair::secp256k1_generated())
         .build(SHandle::new(node_mgr.get_sender()));
@@ -58,6 +68,7 @@ fn main() {
 
     node_mgr.set_service_task_sender(service.control().clone());
     thread::spawn(move || node_mgr.run());
+    thread::spawn(move || network_mgr.run());
     tokio::run(service.for_each(|_| Ok(())));
 }
 

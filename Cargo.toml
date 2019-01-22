@@ -9,12 +9,12 @@ fnv = "1.0.6"
 log = "0.4"
 discovery = { git = "https://github.com/driftluo/p2p.git" }
 p2p = { git = "https://github.com/driftluo/p2p.git" }
-#p2p = { path = "/Volumes/x/cryptape/code/p2p"}
-#discovery = { path = "/Volumes/x/cryptape/code/p2p/discovery" }
 tokio = "0.1.14"
 futures = "0.1.25"
 env_logger = "0.6.0"
 util = { git = "https://github.com/leeyr338/cita-common.git", branch = "develop" }
+libproto = { git = "https://github.com/leeyr338/cita-common.git", branch = "develop" }
+pubsub = { git = "https://github.com/leeyr338/cita-common.git", branch = "develop" }
 serde = "1.0.84"
 serde_derive = "1.0.84"
 clap = "2.32"
@@ -22,3 +22,15 @@ crossbeam-channel= "0.3.6"
 
 [dev-dependencies]
 tempfile = "3.0.5"
+
+[features]
+default = ["secp256k1", "sha3hash", "rabbitmq"]
+secp256k1 = ["libproto/secp256k1"]
+ed25519 = ["libproto/ed25519"]
+sm2 = ["libproto/sm2"]
+sha3hash = ["libproto/sha3hash"]
+blake2bhash = ["libproto/blake2bhash"]
+sm3hash = ["libproto/sm3hash"]
+rabbitmq = ["pubsub/rabbitmq"]
+zeromq = ["pubsub/zeromq"]
+kafka = ["pubsub/kafka"]
