@@ -1,5 +1,5 @@
 
-use log::{debug, warn};
+use log::{debug, warn, trace};
 use std::{
     net::{ SocketAddr },
     collections::HashMap,
@@ -7,6 +7,7 @@ use std::{
     str::FromStr,
 
 };
+use bytes::BytesMut;
 use futures::{
     sync::mpsc::{ Sender },
 };
@@ -28,9 +29,15 @@ use p2p::{
         ServiceTask, Message,
     },
 };
+use libproto::{
+    Message as ProtoMessage,
+    TryInto, TryFrom
+};
+
 use crate::config::{
     NetConfig, NodeConfig,
 };
+use crate::citaprotocol::pubsub_message_to_network_message;
 
 
 pub const DEFAULT_KNOWN_IP: &str = "127.0.0.1";
@@ -186,6 +193,10 @@ impl NodesManagerClient {
         self.send_req(NodesManagerMessage::DelConnectedNodeReq(req));
     }
 
+    pub fn broadcast(&self, req: BroadcastReq) {
+        self.send_req(NodesManagerMessage::Broadcast(req));
+    }
+
     pub fn new(sender: crossbeam_channel::Sender<NodesManagerMessage>) -> Self {
         NodesManagerClient {
             sender,
@@ -211,16 +222,18 @@ pub enum NodesManagerMessage {
     GetRandomNodesReq(GetRandomNodesReq),
     AddConnectedNodeReq(AddConnectedNodeReq),
     DelConnectedNodeReq(DelConnectedNodeReq),
+    Broadcast(BroadcastReq),
 }
 
 impl NodesManagerMessage {
-    pub fn handle(&self, service: &mut NodesManager) {
+    pub fn handle(self, service: &mut NodesManager) {
         match self {
             NodesManagerMessage::AddNodeReq(req) => req.handle(service),
             NodesManagerMessage::DelNodeReq(req) => req.handle(service),
             NodesManagerMessage::GetRandomNodesReq(req) => req.handle(service),
             NodesManagerMessage::AddConnectedNodeReq(req) => req.handle(service),
             NodesManagerMessage::DelConnectedNodeReq(req) => req.handle(service),
+            NodesManagerMessage::Broadcast(req) => req.handle(service),
         }
     }
 }
@@ -236,7 +249,7 @@ impl AddNodeReq {
         }
     }
 
-    pub fn handle(&self, service: &mut NodesManager) {
+    pub fn handle(self, service: &mut NodesManager) {
         service.known_addrs.entry(RawAddr::from(self.addr)).or_insert(100);
     }
 }
@@ -252,7 +265,7 @@ impl DelNodeReq {
         }
     }
 
-    pub fn handle(&self, service: &mut NodesManager) {
+    pub fn handle(self, service: &mut NodesManager) {
         service.known_addrs.remove(&RawAddr::from(self.addr));
     }
 }
@@ -273,7 +286,7 @@ impl GetRandomNodesReq {
         }
     }
 
-    pub fn handle(&self, service: &mut NodesManager) {
+    pub fn handle(self, service: &mut NodesManager) {
         let addrs = service.known_addrs
             .keys()
             .take(self.num)
@@ -307,7 +320,7 @@ impl AddConnectedNodeReq {
         }
     }
 
-    pub fn handle(&self, service: &mut NodesManager) {
+    pub fn handle(self, service: &mut NodesManager) {
 
         // FIXME: If have reached to max_connects, disconnected this node.
         service.connected_addrs.insert(self.session_id, RawAddr::from(self.addr));
@@ -325,7 +338,39 @@ impl DelConnectedNodeReq {
         }
     }
 
-    pub fn handle(&self, service: &mut NodesManager) {
+    pub fn handle(self, service: &mut NodesManager) {
         service.connected_addrs.remove(&self.session_id);
+    }
+}
+
+#[derive(Debug)]
+pub struct BroadcastReq {
+    key: String,
+    msg: ProtoMessage,
+}
+
+impl BroadcastReq {
+    pub fn new(key: String, msg: ProtoMessage) -> Self {
+        BroadcastReq {
+            key,
+            msg,
+        }
+    }
+
+    pub fn handle(self, service: &mut NodesManager) {
+        let origin = self.msg.get_origin();
+        let operate = self.msg.get_operate();
+
+        trace!("Broadcast msg {:?}, from key {}", self.msg, self.key);
+        let msg_bytes: Vec<u8> = self.msg.try_into().unwrap();
+
+        let mut buf = BytesMut::with_capacity(4 + 4 + 1 + self.key.len() + msg_bytes.len());
+        pubsub_message_to_network_message(&mut buf, Some((self.key, msg_bytes)));
+        let msg = Message {
+            session_id: 0,
+            proto_id: 1,
+            data: buf.to_vec(),
+        };
+        service.service_ctrl.clone().unwrap().send_message(None, msg);
     }
 }
