@@ -44,8 +44,8 @@ pub struct NodesManager {
     known_addrs: FnvHashMap<RawAddr, i32>,
     connected_addrs: HashMap<SessionId, RawAddr>,
     max_connects: usize,
-    add_node_sender: crossbeam_channel::Sender<NodesManagerData>,
-    add_node_receiver: crossbeam_channel::Receiver<NodesManagerData>,
+    nodes_manager_client: NodesManagerClient,
+    nodes_manager_service_receiver: crossbeam_channel::Receiver<NodesManagerMessage>,
     service_ctrl: Option<ServiceControl>,
 }
 
@@ -81,57 +81,14 @@ impl NodesManager {
     }
 
     pub fn run(&mut self) {
-
         loop {
             select! {
-                recv(self.add_node_receiver) -> msg => {
+                recv(self.nodes_manager_service_receiver) -> msg => {
                     match msg {
                         Ok(data) => {
-                            match data.cmd {
-                                ManagerCmd::AddAddress => {
-                                    let addr = data.addr.unwrap();
-                                    self.known_addrs.entry(RawAddr::from(addr)).or_insert(100);
-                                },
-                                ManagerCmd::DelAddress => {
-
-                                    // Connected failed!
-                                    let addr = data.addr.unwrap();
-                                    self.known_addrs.remove(&RawAddr::from(addr));
-                                },
-                                ManagerCmd::GetRandom => {
-                                    let get_random_data = data.get_random.unwrap();
-                                    let n = get_random_data.num;
-                                    let addrs = self.known_addrs
-                                        .keys()
-                                        .take(n)
-                                        .map(|addr| addr.socket_addr())
-                                        .collect();
-                                    let sender = get_random_data.data_channel;
-                                    match sender.try_send(addrs) {
-                                        Ok(_) => {
-                                            debug!("Get random n addresses and send them success");
-                                        }
-                                        Err(err) => {
-                                            warn!("Get random n addresses, send them failed : {:?}", err);
-                                        }
-                                    }
-                                },
-                                ManagerCmd::AddConnected => {
-                                    //FIXME: If have reached to max_connects, deconnected this node.
-                                    // Connect success!
-                                    let addr = data.addr.unwrap();
-                                    let id = data.session_id.unwrap_or(1);
-                                    self.connected_addrs.insert(id, RawAddr::from(addr));
-                                }
-                                ManagerCmd::DelConnected => {
-                                    //FIXME: If have reached to max_connects, deconnected this node.
-                                    // Connect success!
-                                    let id = data.session_id.unwrap_or(1);
-                                    self.connected_addrs.remove(&id);
-                                }
-                            }
+                            data.handle(self);
                         },
-                        Err(err) => debug!("Err {:?}", err),
+                        Err(err) => debug!("Error in {:?}", err),
                     }
                 }
                 recv(self.check_connected_nodes) -> _ => {
@@ -142,28 +99,22 @@ impl NodesManager {
         }
     }
 
-    pub fn get_sender(&self) -> crossbeam_channel::Sender<NodesManagerData> {
-        self.add_node_sender.clone()
+    pub fn client(&self) -> NodesManagerClient {
+        self.nodes_manager_client.clone()
     }
 
     pub fn dial_nodes(&self) {
-        // FIXME: If there are no addrs in known_addrs, dial a default address.
+        // FIXME: If there are no addrs in known_addrs, dial a default node.
         debug!("=============================");
         for raw_addr in self.known_addrs.keys() {
-            debug!("Address in known: {:?}", raw_addr.socket_addr());
+            debug!("Node in known: {:?}", raw_addr.socket_addr());
         }
         debug!("-----------------------------");
         for raw_addr in self.connected_addrs.values() {
-            debug!("Address in connected: {:?}", raw_addr.socket_addr());
+            debug!("Node in connected: {:?}", raw_addr.socket_addr());
         }
         debug!("=============================");
 
-        let  msg = Message {
-            session_id: 0,
-            proto_id: 1,
-            data: b"Hello world".to_vec(),
-        };
-        self.service_ctrl.clone().unwrap().send_message(None, msg);
         if self.connected_addrs.len() < self.max_connects {
             for key in self.known_addrs.keys() {
                 if false == self.connected_addrs.values().any(|value| *value == *key) {
@@ -195,40 +146,186 @@ impl Default for NodesManager {
     fn default() -> NodesManager {
         let (tx, rx) = unbounded();
         let ticker = tick(CHECK_CONNECTED_NODES);
+        let client = NodesManagerClient { sender: tx };
+
         NodesManager {
             check_connected_nodes: ticker,
             known_addrs: FnvHashMap::default(),
             connected_addrs: HashMap::default(),
             max_connects: DEFAULT_MAX_CONNECTS,
-            add_node_sender: tx,
-            add_node_receiver: rx,
+            nodes_manager_client: client,
+            nodes_manager_service_receiver: rx,
             service_ctrl: None,
         }
     }
 }
 
-#[derive(Debug)]
-pub enum ManagerCmd {
-    AddAddress,
-    DelAddress,
-    GetRandom,
-    AddConnected,
-    DelConnected,
+#[derive(Clone, Debug)]
+pub struct NodesManagerClient {
+    sender: crossbeam_channel::Sender<NodesManagerMessage>,
 }
 
-#[derive(Debug)]
-pub struct GetRandomAddrData {
-    pub num: usize,
+impl NodesManagerClient {
+    pub fn add_node(&self, req: AddNodeReq) {
+        self.send_req(NodesManagerMessage::AddNodeReq(req));
+    }
 
-    // After get the random address, use data_channel sender them back immediately
-    pub data_channel: crossbeam_channel::Sender<Vec<SocketAddr>>,
+    pub fn del_node(&self, req: DelNodeReq) {
+        self.send_req(NodesManagerMessage::DelNodeReq(req));
+    }
+
+    pub fn get_random_nodes(&self, req: GetRandomNodesReq) {
+        self.send_req(NodesManagerMessage::GetRandomNodesReq(req));
+    }
+
+    pub fn add_connected_node(&self, req: AddConnectedNodeReq) {
+        self.send_req(NodesManagerMessage::AddConnectedNodeReq(req));
+    }
+
+    pub fn del_connected_node(&self, req: DelConnectedNodeReq) {
+        self.send_req(NodesManagerMessage::DelConnectedNodeReq(req));
+    }
+
+    pub fn new(sender: crossbeam_channel::Sender<NodesManagerMessage>) -> Self {
+        NodesManagerClient {
+            sender,
+        }
+    }
+
+    fn send_req(&self, req: NodesManagerMessage) {
+        match self.sender.try_send(req) {
+            Ok(_) => {
+                debug!("Send message to node manager to delete node Success");
+            }
+            Err(err) => {
+                warn!("Send message to node manager to delete node failed : {:?}", err);
+            }
+        }
+    }
 }
 
-//#[derive(Debug)]
-pub struct NodesManagerData {
-    pub cmd: ManagerCmd,
-    pub addr: Option<SocketAddr>,
-    pub get_random: Option<GetRandomAddrData>,
-    pub service_task_sender: Option<Sender<ServiceTask>>,
-    pub session_id: Option<SessionId>,
+// Define messages for NodesManager
+pub enum NodesManagerMessage {
+    AddNodeReq(AddNodeReq),
+    DelNodeReq(DelNodeReq),
+    GetRandomNodesReq(GetRandomNodesReq),
+    AddConnectedNodeReq(AddConnectedNodeReq),
+    DelConnectedNodeReq(DelConnectedNodeReq),
+}
+
+impl NodesManagerMessage {
+    pub fn handle(&self, service: &mut NodesManager) {
+        match self {
+            NodesManagerMessage::AddNodeReq(req) => req.handle(service),
+            NodesManagerMessage::DelNodeReq(req) => req.handle(service),
+            NodesManagerMessage::GetRandomNodesReq(req) => req.handle(service),
+            NodesManagerMessage::AddConnectedNodeReq(req) => req.handle(service),
+            NodesManagerMessage::DelConnectedNodeReq(req) => req.handle(service),
+        }
+    }
+}
+
+pub struct AddNodeReq {
+    addr: SocketAddr,
+}
+
+impl AddNodeReq {
+    pub fn new(addr: SocketAddr) -> Self {
+        AddNodeReq {
+            addr,
+        }
+    }
+
+    pub fn handle(&self, service: &mut NodesManager) {
+        service.known_addrs.entry(RawAddr::from(self.addr)).or_insert(100);
+    }
+}
+
+pub struct DelNodeReq {
+    addr: SocketAddr,
+}
+
+impl DelNodeReq {
+    pub fn new(addr: SocketAddr) -> Self {
+        DelNodeReq {
+            addr,
+        }
+    }
+
+    pub fn handle(&self, service: &mut NodesManager) {
+        service.known_addrs.remove(&RawAddr::from(self.addr));
+    }
+}
+
+pub struct GetRandomNodesReq {
+    num: usize,
+    return_channel: crossbeam_channel::Sender<Vec<SocketAddr>>,
+}
+
+impl GetRandomNodesReq {
+    pub fn new(
+        num: usize,
+        return_channel: crossbeam_channel::Sender<Vec<SocketAddr>>,
+    ) -> Self {
+        GetRandomNodesReq {
+            num,
+            return_channel,
+        }
+    }
+
+    pub fn handle(&self, service: &mut NodesManager) {
+        let addrs = service.known_addrs
+            .keys()
+            .take(self.num)
+            .map(|addr| addr.socket_addr())
+            .collect();
+
+        match self.return_channel.try_send(addrs) {
+            Ok(_) => {
+                debug!("Get random n nodes and send them success");
+            }
+            Err(err) => {
+                warn!("Get random n nodes, send them failed : {:?}", err);
+            }
+        }
+    }
+}
+
+pub struct AddConnectedNodeReq {
+    addr: SocketAddr,
+    session_id: SessionId,
+}
+
+impl AddConnectedNodeReq {
+    pub fn new(
+        addr: SocketAddr,
+        session_id: SessionId,
+    ) -> Self {
+        AddConnectedNodeReq {
+            addr,
+            session_id,
+        }
+    }
+
+    pub fn handle(&self, service: &mut NodesManager) {
+
+        // FIXME: If have reached to max_connects, disconnected this node.
+        service.connected_addrs.insert(self.session_id, RawAddr::from(self.addr));
+    }
+}
+
+pub struct DelConnectedNodeReq {
+    session_id: SessionId,
+}
+
+impl DelConnectedNodeReq {
+    pub fn new(session_id: SessionId) -> Self {
+        DelConnectedNodeReq {
+            session_id,
+        }
+    }
+
+    pub fn handle(&self, service: &mut NodesManager) {
+        service.connected_addrs.remove(&self.session_id);
+    }
 }

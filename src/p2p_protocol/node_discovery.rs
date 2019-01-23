@@ -30,62 +30,44 @@ use p2p::{
 };
 
 use crate::node_manager::{
-    ManagerCmd, NodesManagerData, GetRandomAddrData, 
+    NodesManagerClient, AddNodeReq, GetRandomNodesReq,
 };
 #[derive(Clone, Debug)]
 pub struct NodesAddressManager {
-    pub nodes_mgr_sender: crossbeam_channel::Sender<NodesManagerData>,
+    pub nodes_mgr_client: NodesManagerClient,
+}
+
+impl NodesAddressManager {
+    pub fn new(nodes_mgr_client: NodesManagerClient) -> Self {
+        NodesAddressManager {
+            nodes_mgr_client,
+        }
+    }
 }
 
 impl AddressManager for NodesAddressManager {
     fn add_new(&mut self, addr: Multiaddr) {
-        let addr = multiaddr_to_socketaddr(&addr).unwrap();
-        debug!("add node {:?}:{} to manager", addr, addr.port());
+        let address = multiaddr_to_socketaddr(&addr).unwrap();
+        let req = AddNodeReq::new(address);
+        self.nodes_mgr_client.add_node(req);
 
-        let data = NodesManagerData {
-            cmd: ManagerCmd::AddAddress,
-            addr: Some(addr),
-            get_random: None,
-            service_task_sender: None,
-            session_id: None,
-        };
-
-        match self.nodes_mgr_sender.try_send(data) {
-            Ok(_) => {
-                debug!("Send new address to nodes manager success");
-            }
-            Err(err) => {
-                warn!("Send new address to nodes manager failed : {:?}", err);
-            }
-        }
+        debug!("[add_new] Add node {:?}:{} to manager", address, address.port());
     }
 
-    // Question: why we need this?
     fn misbehave(&mut self, _addr: Multiaddr, _ty: u64) -> i32 {
         unimplemented!()
     }
 
     fn get_random(&mut self, n: usize) -> Vec<Multiaddr> {
         let (tx, rx) = unbounded();
-        let data = NodesManagerData {
-            cmd: ManagerCmd::GetRandom,
-            addr: None,
-            get_random: Some(GetRandomAddrData {num: n, data_channel: tx}),
-            service_task_sender: None,
-            session_id: None,
-        };
 
-        match self.nodes_mgr_sender.try_send(data) {
-            Ok(_) => {
-                debug!("Send message to address manager to get n random address Success");
-            }
-            Err(err) => {
-                warn!("Send message to address manager to get n random address failed : {:?}", err);
-            }
-        }
+        let req = GetRandomNodesReq::new(n, tx);
+        self.nodes_mgr_client.get_random_nodes(req);
 
         let ret = rx.recv().unwrap();
-        debug!("Get address : {:?}", ret);
+
+        debug!("[get_random] Get address : {:?} from nodes manager.", ret);
+
         ret.into_iter()
             .map(|addr| addr.to_multiaddr().unwrap())
             .collect()
@@ -225,6 +207,15 @@ impl ServiceProtocol for DiscoveryProtocol {
 pub struct DiscoveryProtocolMeta {
     pub id: ProtocolId,
     pub addr_mgr: NodesAddressManager,
+}
+
+impl DiscoveryProtocolMeta {
+    pub fn new(id: ProtocolId, addr_mgr: NodesAddressManager) -> Self {
+        DiscoveryProtocolMeta {
+            id,
+            addr_mgr,
+        }
+    }
 }
 
 impl ProtocolMeta<LengthDelimitedCodec> for DiscoveryProtocolMeta {

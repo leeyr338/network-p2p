@@ -20,7 +20,7 @@ use p2p::{
 };
 
 use crate::node_manager::{
-    ManagerCmd, NodesManagerData,
+    NodesManagerClient, AddConnectedNodeReq, DelNodeReq, DelConnectedNodeReq,
 };
 
 pub mod node_discovery;
@@ -28,13 +28,13 @@ pub mod transfer;
 
 // This handle will be shared with all protocol
 pub struct SHandle {
-    nodes_mgr_sender: crossbeam_channel::Sender<NodesManagerData>,
+    nodes_mgr_client: NodesManagerClient,
 }
 
 impl SHandle {
-    pub fn new(sender: crossbeam_channel::Sender<NodesManagerData>) -> Self {
+    pub fn new(nodes_mgr_client: NodesManagerClient) -> Self {
         SHandle {
-            nodes_mgr_sender: sender,
+            nodes_mgr_client,
         }
     }
 }
@@ -48,44 +48,19 @@ impl ServiceHandle for SHandle {
                 let address = multiaddr_to_socketaddr(&address).unwrap();
 
                 // If dial to a connected node, need add it to connected address list.
-                // FIXME: Use a new error kind to distinguish the `Connected to the connected node`
                 match error {
                     error::Error::RepeatedConnection(session_id) => {
-                        let data = NodesManagerData {
-                            cmd: ManagerCmd::AddConnected,
-                            addr: Some(address),
-                            get_random: None,
-                            service_task_sender: None,
-                            session_id: Some(session_id),
-                        };
-                        match self.nodes_mgr_sender.try_send(data) {
-                            Ok(_) => {
-                                debug!("[handle_event] Send message to address manager to delete address Success");
-                            }
-                            Err(err) => {
-                                warn!("[handle_envent] Send message to address manager to delete address failed : {:?}", err);
-                            }
-                        }
-
-                        debug!("Connected to the same node : {:?}", address);
+                        let req = AddConnectedNodeReq::new(address, session_id);
+                        self.nodes_mgr_client.add_connected_node(req);
+                        debug!("[handle_error] Connected to the same node : {:?}", address);
                     },
                     _ => {
-                        let data = NodesManagerData {
-                            cmd: ManagerCmd::DelAddress,
-                            addr: Some(address),
-                            get_random: None,
-                            service_task_sender: None,
-                            session_id: None,
-                        };
-                        match self.nodes_mgr_sender.try_send(data) {
-                            Ok(_) => {
-                                debug!("Send message to address manager to delete address Success");
-                            }
-                            Err(err) => {
-                                warn!("Send message to address manager to delete address failed : {:?}", err);
-                            }
-                        }
-                        warn!("Error in {:?} : {:?}, delete this address from nodes manager", address, error);
+
+                        //FIXME: Using score for deleting a node from known nodes
+                        let req = DelNodeReq::new(address);
+                        self.nodes_mgr_client.del_node(req);
+                        warn!("[handle_error] Error in {:?} : {:?}, delete this address from nodes manager",
+                              address, error);
                     }
                 }
             },
@@ -93,7 +68,6 @@ impl ServiceHandle for SHandle {
         }
     }
 
-    // Question: this will be called every session open?
     fn handle_event(&mut self, _env: &mut ServiceContext, event: ServiceEvent) {
         match event {
             ServiceEvent::SessionOpen {
@@ -103,45 +77,17 @@ impl ServiceHandle for SHandle {
                 public_key,
             } => {
                 let address = multiaddr_to_socketaddr(&address).unwrap();
-                debug!("[handle_event] Service open on : {:?}, session id: {:?}, ty: {:?}, publice_key: {:?}", address, id, ty, public_key);
+                debug!("[handle_event] Service open on : {:?}, session id: {:?}, ty: {:?}, public_key: {:?}",
+                       address, id, ty, public_key);
                 if ty == SessionType::Client {
-                    debug!("[handle_event] ty == Client");
-                    // FIXME: this logic should be a function
-                    let data = NodesManagerData {
-                        cmd: ManagerCmd::AddConnected,
-                        addr: Some(address),
-                        get_random: None,
-                        service_task_sender: None,
-                        session_id: None,
-                    };
-                    match self.nodes_mgr_sender.try_send(data) {
-                        Ok(_) => {
-                            debug!("[handle_event] Send message to address manager to delete address Success");
-                        }
-                        Err(err) => {
-                            warn!("[handle_envent] Send message to address manager to delete address failed : {:?}", err);
-                        }
-                    }
+                    let req = AddConnectedNodeReq::new(address, id);
+                    self.nodes_mgr_client.add_connected_node(req);
                 }
 
             },
             ServiceEvent::SessionClose { id } => {
-                debug!("[handle_error] ========= session {} close! ", id);
-                let data = NodesManagerData {
-                    cmd: ManagerCmd::DelConnected,
-                    addr: None,
-                    get_random: None,
-                    service_task_sender: None,
-                    session_id: Some(id),
-                };
-                match self.nodes_mgr_sender.try_send(data) {
-                    Ok(_) => {
-                        debug!("Send message to address manager to delete address Success");
-                    }
-                    Err(err) => {
-                        warn!("Send message to address manager to delete address failed : {:?}", err);
-                    }
-                }
+                let req = DelConnectedNodeReq::new(id);
+                self.nodes_mgr_client.del_connected_node(req);
             },
             _ => (),
         }
