@@ -10,21 +10,26 @@ use p2p::{
     },
     SessionId,
 };
+use libproto::{
+    Message as ProtoMessage,
+    TryInto, TryFrom
+};
 use crossbeam_channel;
-
+use bytes::BytesMut;
 use tokio::codec::length_delimited::LengthDelimitedCodec;
-use crate::network::Source;
+use crate::network::{ NetworkClient, RemoteMessage };
+use crate::citaprotocol::network_message_to_pubsub_message;
 
 pub struct TransferProtocolMeta {
     id: ProtocolId,
-    msg_sender: crossbeam_channel::Sender<(Source, (String, Vec<u8>))>,
+    network_client: NetworkClient,
 }
 
 impl TransferProtocolMeta {
-    pub fn new(id: ProtocolId, msg_sender: crossbeam_channel::Sender<(Source, (String, Vec<u8>))>) -> Self {
+    pub fn new(id: ProtocolId, network_client: NetworkClient) -> Self {
         TransferProtocolMeta {
             id,
-            msg_sender,
+            network_client,
         }
     }
 }
@@ -40,7 +45,7 @@ impl ProtocolMeta<LengthDelimitedCodec> for TransferProtocolMeta {
         let handle = Box::new( TransferProtocol {
             proto_id: self.id,
             connected_session_ids: Vec::default(),
-            msg_sender: self.msg_sender.clone(),
+            network_client: self.network_client.clone(),
         });
         Some(handle)
     }
@@ -49,7 +54,7 @@ impl ProtocolMeta<LengthDelimitedCodec> for TransferProtocolMeta {
 struct TransferProtocol {
     proto_id: ProtocolId,
     connected_session_ids: Vec<SessionId>,
-    msg_sender: crossbeam_channel::Sender<(Source, (String, Vec<u8>))>,
+    network_client: NetworkClient,
 }
 
 impl ServiceProtocol for TransferProtocol {
@@ -80,15 +85,18 @@ impl ServiceProtocol for TransferProtocol {
     }
 
     fn received(&mut self, env: &mut ServiceContext, session: &SessionContext, data: Vec<u8>) {
-//        match self.msg_sender.try_send(data) {
-//            Ok(_) => {
-//                debug!("[received] Send message to network success");
-//            }
-//            Err(err) => {
-//                warn!("[received] Send message to network failed : {:?}", err);
-//            }
-//        }
-        unimplemented!()
+        let mut data = BytesMut::from(data);
+        match network_message_to_pubsub_message(&mut data) {
+            Some((key, message)) => {
+                let mut msg = ProtoMessage::try_from(&message).unwrap();
+                msg.set_origin(session.id.clone() as u32);
+                self.network_client.handle_remote_message(RemoteMessage::new(
+                    key,
+                    msg.try_into().unwrap()
+                ));
+            },
+            None => (),
+        }
     }
 
     fn notify(&mut self, control: &mut ServiceContext, token: u64) {

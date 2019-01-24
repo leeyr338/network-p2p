@@ -173,6 +173,12 @@ pub struct NodesManagerClient {
 }
 
 impl NodesManagerClient {
+    pub fn new(sender: crossbeam_channel::Sender<NodesManagerMessage>) -> Self {
+        NodesManagerClient {
+            sender,
+        }
+    }
+
     pub fn add_node(&self, req: AddNodeReq) {
         self.send_req(NodesManagerMessage::AddNodeReq(req));
     }
@@ -197,19 +203,17 @@ impl NodesManagerClient {
         self.send_req(NodesManagerMessage::Broadcast(req));
     }
 
-    pub fn new(sender: crossbeam_channel::Sender<NodesManagerMessage>) -> Self {
-        NodesManagerClient {
-            sender,
-        }
+    pub fn get_peer_count(&self, req: GetPeerCountReq) {
+        self.send_req(NodesManagerMessage::GetPeerCount(req));
     }
 
     fn send_req(&self, req: NodesManagerMessage) {
         match self.sender.try_send(req) {
             Ok(_) => {
-                debug!("Send message to node manager to delete node Success");
+                debug!("Send message to node manager Success");
             }
             Err(err) => {
-                warn!("Send message to node manager to delete node failed : {:?}", err);
+                warn!("Send message to node manager failed : {:?}", err);
             }
         }
     }
@@ -223,6 +227,7 @@ pub enum NodesManagerMessage {
     AddConnectedNodeReq(AddConnectedNodeReq),
     DelConnectedNodeReq(DelConnectedNodeReq),
     Broadcast(BroadcastReq),
+    GetPeerCount(GetPeerCountReq),
 }
 
 impl NodesManagerMessage {
@@ -234,6 +239,7 @@ impl NodesManagerMessage {
             NodesManagerMessage::AddConnectedNodeReq(req) => req.handle(service),
             NodesManagerMessage::DelConnectedNodeReq(req) => req.handle(service),
             NodesManagerMessage::Broadcast(req) => req.handle(service),
+            NodesManagerMessage::GetPeerCount(req) => req.handle(service),
         }
     }
 }
@@ -372,5 +378,30 @@ impl BroadcastReq {
             data: buf.to_vec(),
         };
         service.service_ctrl.clone().unwrap().send_message(None, msg);
+    }
+}
+
+pub struct GetPeerCountReq {
+    return_channel: crossbeam_channel::Sender<usize>,
+}
+
+impl GetPeerCountReq {
+    pub fn new(return_channel: crossbeam_channel::Sender<usize>) -> Self {
+        GetPeerCountReq {
+            return_channel,
+        }
+    }
+
+    pub fn handle(self, service: &mut NodesManager) {
+        let peer_count = service.connected_addrs.len();
+
+        match self.return_channel.try_send(peer_count) {
+            Ok(_) => {
+                debug!("Get peer count and send it success");
+            }
+            Err(err) => {
+                warn!("Get peer count {}, but send it failed : {:?}", peer_count, err);
+            }
+        }
     }
 }
