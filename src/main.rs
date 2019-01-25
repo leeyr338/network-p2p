@@ -8,7 +8,11 @@ pub mod mq_client;
 pub mod synchronizer;
 
 use env_logger;
-use log::{ debug, trace };
+use clap::App;
+use dotenv;
+use log::{ debug, trace, info };
+use util::micro_service_init;
+use util::set_panic_handler;
 use futures::{
     prelude::*,
 };
@@ -48,15 +52,27 @@ use crate::network::{
 use crate::mq_client::MqClient;
 use crate::synchronizer::Synchronizer;
 
-//include!(concat!(env!("OUT_DIR"), "./build_info.rs"));
+include!(concat!(env!("OUT_DIR"), "/build_info.rs"));
 
 fn main() {
+
+    micro_service_init!("cita-network", "CITA:network");
+    info!("Version: {}", get_build_info_str(true));
+
     env_logger::init();
+    // init app
+    // todo load config
+    let matches = App::new("network")
+        .version(get_build_info_str(true))
+        .long_version(get_build_info_str(false))
+        .author("Cryptape")
+        .about("CITA Block Chain Node powered by Rust")
+        .args_from_usage("-c, --config=[FILE] 'Sets a custom config file'")
+        .get_matches();
+
+    let config_path = matches.value_of("config").unwrap_or("config");
 
     // >>>> Init config
-    // FIXME: Use App:new to get config
-    let config_path = std::env::args().nth(1)
-        .unwrap_or("/Volumes/x/cryptape/gettingStart/rust/network-p2p/examples/config/1_node.toml".to_string());
     debug!("config path {:?}", config_path);
     let config = NetConfig::new(&config_path);
     debug!("network config is {:?}", config);
