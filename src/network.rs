@@ -10,8 +10,12 @@ use libproto::router::{
     RoutingKey, MsgType, SubModules,
 };
 use libproto::routing_key;
-use libproto::{Message, Response};
+use libproto::{
+    Message as ProtoMessage,
+    Response,
+};
 use libproto::{TryFrom, TryInto};
+use libproto::snapshot::{ Cmd, Resp, SnapshotResp };
 use crate::mq_client::{ MqClient, PubMessage };
 use crate::node_manager::{ NodesManagerClient, BroadcastReq, GetPeerCountReq };
 
@@ -46,10 +50,6 @@ impl Network {
                 msg.handle(self);
             }
         }
-    }
-
-    fn snapshot_req(&self, data: &[u8]) {
-        unimplemented!()
     }
 }
 
@@ -124,7 +124,7 @@ impl LocalMessage {
                 // FIXME: Send message to synchronizer
             },
             routing_key!(Chain >> SyncResponse) => {
-                let msg = Message::try_from(&self.data).unwrap();
+                let msg = ProtoMessage::try_from(&self.data).unwrap();
                 service.nodes_mgr_client.broadcast(BroadcastReq::new(
                     routing_key!(Synchronizer >> SyncResponse).into(),
                     msg
@@ -135,7 +135,7 @@ impl LocalMessage {
             },
             routing_key!(Snapshot >> SnapshotReq) => {
                 info!("Set disconnect and response");
-                service.snapshot_req(&self.data);
+                self.snapshot_req(&self.data, service);
             },
             _ => {
                 error!("Unexpected key {} from Local", self.key);
@@ -144,7 +144,7 @@ impl LocalMessage {
     }
 
     fn reply_rpc(&self, data: &[u8], service: &mut Network) {
-        let mut msg = Message::try_from(data).unwrap();
+        let mut msg = ProtoMessage::try_from(data).unwrap();
 
         let req_opt = msg.take_request();
         {
@@ -162,7 +162,7 @@ impl LocalMessage {
                     // FIXME: This is a block receive, double check about this
                     let peer_count = rx.recv().unwrap();
                     response.set_peercount(peer_count as u32);
-                    let msg: Message = response.into();
+                    let msg: ProtoMessage = response.into();
                     service.mq_client.send_peer_count(PubMessage::new(
                         routing_key!(Net >> Response).into(),
                         msg.try_into().unwrap()
@@ -171,6 +171,51 @@ impl LocalMessage {
             } else {
                 warn!("[reply_rpc] Receive unexpected rpc data");
             }
+        }
+    }
+
+    fn snapshot_req(&self, data: &[u8], service: &mut Network) {
+        let mut msg = ProtoMessage::try_from(data).unwrap();
+        let req = msg.take_snapshot_req().unwrap();
+        let mut resp = SnapshotResp::new();
+        let mut send = false;
+
+        match req.cmd {
+            Cmd::Snapshot => {
+                info!("[snapshot] receive cmd: Snapshot");
+            },
+            Cmd::Begin => {
+                info!("[snapshot] receive cmd: Begin");
+                service.is_pause.store(true, Ordering::SeqCst);
+                resp.set_resp(Resp::BeginAck);
+                resp.set_flag(true);
+                send = true;
+            },
+            Cmd::Restore => {
+                info!("[snapshot] receive cmd: Restore");
+            },
+            Cmd::Clear => {
+                info!("[snapshot] receive cmd: Clear");
+                resp.set_resp(Resp::ClearAck);
+                resp.set_flag(true);
+                send = true;
+
+            },
+            Cmd::End => {
+                info!("[snapshot] receive cmd: End");
+                service.is_pause.store(false, Ordering::SeqCst);
+                resp.set_resp(Resp::EndAck);
+                resp.set_flag(true);
+                send = true;
+            },
+        }
+
+        if send {
+            let msg: ProtoMessage = resp.into();
+            service.mq_client.send_snapshot_resp(PubMessage::new(
+                routing_key!(Net >> SnapshotResp).into(),
+                (&msg).try_into().unwrap()
+            ));
         }
     }
 }

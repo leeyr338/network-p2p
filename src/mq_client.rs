@@ -35,6 +35,10 @@ impl MqClient {
     pub fn send_peer_count(&self, msg: PubMessage) {
         let _ = self.mq_sender.send((msg.key, msg.data));
     }
+
+    pub fn send_snapshot_resp(&self, msg: PubMessage) {
+        let _ = self.mq_sender.send((msg.key, msg.data));
+    }
 }
 
 pub struct PubMessage {
