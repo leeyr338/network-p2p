@@ -5,6 +5,7 @@ pub mod node_manager;
 pub mod network;
 pub mod citaprotocol;
 pub mod mq_client;
+pub mod synchronizer;
 
 use env_logger;
 use log::{ debug, trace };
@@ -18,7 +19,7 @@ use std::sync::mpsc::channel;
 use pubsub::start_pubsub;
 use libproto::routing_key;
 use libproto::router::{MsgType, SubModules, RoutingKey};
-use libproto::{ Message, Response, TryInto, TryFrom };
+use libproto::{ Message, TryFrom };
 
 use p2p::{
     builder::ServiceBuilder,
@@ -45,6 +46,7 @@ use crate::network::{
     Network, LocalMessage,
 };
 use crate::mq_client::MqClient;
+use crate::synchronizer::Synchronizer;
 
 //include!(concat!(env!("OUT_DIR"), "./build_info.rs"));
 
@@ -106,8 +108,12 @@ fn main() {
 
     // >>>> Init p2p protocols
     let mut nodes_mgr = NodesManager::from_config(config.clone());
-    let mut network_mgr = Network::new(mq_client, nodes_mgr.client());
-
+    let mut synchronizer_mgr = Synchronizer::new(mq_client.clone(), nodes_mgr.client());
+    let mut network_mgr = Network::new(
+        mq_client.clone(),
+        nodes_mgr.client(),
+        synchronizer_mgr.client()
+    );
     let discovery_meta = DiscoveryProtocolMeta::new(
         0,
         NodesAddressManager::new(nodes_mgr.client())
@@ -157,6 +163,7 @@ fn main() {
 
     thread::spawn(move || nodes_mgr.run());
     thread::spawn(move || network_mgr.run());
+    thread::spawn(move || synchronizer_mgr.run());
     tokio::run(service.for_each(|_| Ok(())));
     // <<<< End run system
 }

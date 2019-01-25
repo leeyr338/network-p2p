@@ -1,10 +1,7 @@
 
 use std::sync::mpsc::Sender;
-use libproto::{
-    Message as ProtoMessage,
-    TryInto, TryFrom
-};
 
+#[derive(Clone)]
 pub struct MqClient {
     auth_sender: Sender<(String, Vec<u8>)>,
     consensus_sender: Sender<(String, Vec<u8>)>,
@@ -37,6 +34,15 @@ impl MqClient {
     }
 
     pub fn send_snapshot_resp(&self, msg: PubMessage) {
+        let _ = self.mq_sender.send((msg.key, msg.data));
+    }
+
+    // Publish a synchronize request, to start synchronize operation in this node
+    pub fn pub_sync_request(&self, msg: PubMessage) {
+        let _ = self.mq_sender.send((msg.key, msg.data));
+    }
+
+    pub fn pub_sync_blocks(&self, msg: PubMessage) {
         let _ = self.mq_sender.send((msg.key, msg.data));
     }
 }

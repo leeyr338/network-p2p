@@ -18,17 +18,22 @@ use libproto::{TryFrom, TryInto};
 use libproto::snapshot::{ Cmd, Resp, SnapshotResp };
 use crate::mq_client::{ MqClient, PubMessage };
 use crate::node_manager::{ NodesManagerClient, BroadcastReq, GetPeerCountReq };
-
+use crate::synchronizer::{ SynchronizerClient, SynchronizerMessage };
 pub struct Network {
     is_pause: Arc<AtomicBool>,
     mq_client: MqClient,
     network_client: NetworkClient,
     nodes_mgr_client: NodesManagerClient,
+    sync_client: SynchronizerClient,
     msg_receiver: crossbeam_channel::Receiver<NetworkMessage>,
 }
 
 impl Network {
-    pub fn new(mq_client: MqClient, nodes_mgr_client: NodesManagerClient) -> Self {
+    pub fn new(
+        mq_client: MqClient,
+        nodes_mgr_client: NodesManagerClient,
+        sync_client: SynchronizerClient,
+    ) -> Self {
         let (tx, rx) = unbounded();
         let client = NetworkClient{ sender: tx };
         Network {
@@ -36,6 +41,7 @@ impl Network {
             mq_client,
             network_client: client,
             nodes_mgr_client,
+            sync_client,
             msg_receiver: rx,
         }
     }
@@ -121,7 +127,10 @@ impl LocalMessage {
 
         match rt_key {
             routing_key!(Chain >> Status) => {
-                // FIXME: Send message to synchronizer
+                service.sync_client.handle_local_status(SynchronizerMessage::new(
+                    self.key,
+                    self.data
+                ));
             },
             routing_key!(Chain >> SyncResponse) => {
                 let msg = ProtoMessage::try_from(&self.data).unwrap();
@@ -242,12 +251,23 @@ impl RemoteMessage {
         }
 
         match rt_key {
-            routing_key!(Synchronizer >> Status)
-            | routing_key!(Synchronizer >> SyncResponse) => {
-                // FIXME: Forward data to synchronizer
+            routing_key!(Synchronizer >> Status) => {
+                service.sync_client.handle_remote_status(SynchronizerMessage::new(
+                    self.key,
+                    self.data
+                ));
+            }
+            routing_key!(Synchronizer >> SyncResponse) => {
+                service.sync_client.handle_remote_response(SynchronizerMessage::new(
+                    self.key,
+                    self.data
+                ));
             },
             routing_key!(Synchronizer >> SyncRequest) => {
-                // FIXME: Forward data to MQ
+                service.mq_client.pub_sync_request(PubMessage::new(
+                    routing_key!(Net >> SyncRequest).into(),
+                    self.data
+                ));
             },
             routing_key!(Consensus >> CompactSignedProposal) => {
                 let msg = PubMessage::new(

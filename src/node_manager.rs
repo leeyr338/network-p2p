@@ -8,9 +8,6 @@ use std::{
 
 };
 use bytes::BytesMut;
-use futures::{
-    sync::mpsc::{ Sender },
-};
 use crossbeam_channel;
 use crossbeam_channel::{
     unbounded, tick, select,
@@ -25,13 +22,11 @@ use p2p::{
     multiaddr::{
         ToMultiaddr
     },
-    service::{
-        ServiceTask, Message,
-    },
+    service::Message,
 };
 use libproto::{
     Message as ProtoMessage,
-    TryInto, TryFrom
+    TryInto,
 };
 
 use crate::config::{
@@ -364,10 +359,7 @@ impl BroadcastReq {
     }
 
     pub fn handle(self, service: &mut NodesManager) {
-        let origin = self.msg.get_origin();
-        let operate = self.msg.get_operate();
-
-        trace!("Broadcast msg {:?}, from key {}", self.msg, self.key);
+         trace!("Broadcast msg {:?}, from key {}", self.msg, self.key);
         let msg_bytes: Vec<u8> = self.msg.try_into().unwrap();
 
         let mut buf = BytesMut::with_capacity(4 + 4 + 1 + self.key.len() + msg_bytes.len());
@@ -377,7 +369,7 @@ impl BroadcastReq {
             proto_id: 1,
             data: buf.to_vec(),
         };
-        service.service_ctrl.clone().unwrap().send_message(None, msg);
+        let _= service.service_ctrl.clone().unwrap().send_message(None, msg);
     }
 }
 

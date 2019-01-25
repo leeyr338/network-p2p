@@ -1,5 +1,5 @@
 
-use log::{ info, debug, warn };
+use log::{ info };
 use p2p::{
     ProtocolId,
     traits::{
@@ -58,11 +58,11 @@ struct TransferProtocol {
 }
 
 impl ServiceProtocol for TransferProtocol {
-    fn init(&mut self, control: &mut ServiceContext) {
+    fn init(&mut self, _control: &mut ServiceContext) {
 
     }
 
-    fn connected(&mut self, control: &mut ServiceContext, session: &SessionContext, version: &str) {
+    fn connected(&mut self, _control: &mut ServiceContext, session: &SessionContext, version: &str) {
         info!("[connected] proto id [{}] open on session [{}], address: [{}], type: [{:?}], version: {}",
             self.proto_id, session.id, session.address, session.ty, version
         );
@@ -70,7 +70,7 @@ impl ServiceProtocol for TransferProtocol {
         info!("[connected] connected sessions: {:?}", self.connected_session_ids);
     }
 
-    fn disconnected(&mut self, control: &mut ServiceContext, session: &SessionContext) {
+    fn disconnected(&mut self, _control: &mut ServiceContext, session: &SessionContext) {
         let new_list = self
             .connected_session_ids
             .iter()
@@ -84,7 +84,7 @@ impl ServiceProtocol for TransferProtocol {
         );
     }
 
-    fn received(&mut self, env: &mut ServiceContext, session: &SessionContext, data: Vec<u8>) {
+    fn received(&mut self, _env: &mut ServiceContext, session: &SessionContext, data: Vec<u8>) {
         let mut data = BytesMut::from(data);
         match network_message_to_pubsub_message(&mut data) {
             Some((key, message)) => {
@@ -99,7 +99,7 @@ impl ServiceProtocol for TransferProtocol {
         }
     }
 
-    fn notify(&mut self, control: &mut ServiceContext, token: u64) {
+    fn notify(&mut self, _control: &mut ServiceContext, token: u64) {
         info!("[notify] proto [{}] received notify, token: {}", self.proto_id, token);
     }
 }
