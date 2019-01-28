@@ -22,7 +22,6 @@ use p2p::{
     multiaddr::{
         ToMultiaddr
     },
-    service::Message,
 };
 use libproto::{
     Message as ProtoMessage,
@@ -364,12 +363,10 @@ impl BroadcastReq {
 
         let mut buf = BytesMut::with_capacity(4 + 4 + 1 + self.key.len() + msg_bytes.len());
         pubsub_message_to_network_message(&mut buf, Some((self.key, msg_bytes)));
-        let msg = Message {
-            session_id: 0,
-            proto_id: 1,
-            data: buf.to_vec(),
-        };
-        let _= service.service_ctrl.clone().unwrap().send_message(None, msg);
+        let _= service.service_ctrl
+            .clone()
+            .unwrap()
+            .send_message(None, 1, buf.to_vec());
     }
 }
 

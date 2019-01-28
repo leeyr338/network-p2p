@@ -14,7 +14,7 @@ use p2p::{
     },
     utils::multiaddr_to_socketaddr,
     service::{
-        ServiceEvent,
+        ServiceEvent, ServiceError,
     },
     error,
 };
@@ -41,10 +41,10 @@ impl SHandle {
 
 impl ServiceHandle for SHandle {
 
-    fn handle_error(&mut self, _env: &mut ServiceContext, error: ServiceEvent) {
+    fn handle_error(&mut self, _env: &mut ServiceContext, error: ServiceError) {
         debug!("return error {:?}", error);
         match error {
-            ServiceEvent::DialerError{ address, error } => {
+            ServiceError::DialerError{ address, error } => {
                 let address = multiaddr_to_socketaddr(&address).unwrap();
 
                 // If dial to a connected node, need add it to connected address list.
@@ -89,7 +89,6 @@ impl ServiceHandle for SHandle {
                 let req = DelConnectedNodeReq::new(id);
                 self.nodes_mgr_client.del_connected_node(req);
             },
-            _ => (),
         }
     }
 }
