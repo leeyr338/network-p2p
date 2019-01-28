@@ -197,6 +197,10 @@ impl NodesManagerClient {
         self.send_req(NodesManagerMessage::Broadcast(req));
     }
 
+    pub fn send_message(&self, req: SingleTxReq) {
+        self.send_req(NodesManagerMessage::SingleTxReq(req));
+    }
+
     pub fn get_peer_count(&self, req: GetPeerCountReq) {
         self.send_req(NodesManagerMessage::GetPeerCount(req));
     }
@@ -221,6 +225,7 @@ pub enum NodesManagerMessage {
     AddConnectedNodeReq(AddConnectedNodeReq),
     DelConnectedNodeReq(DelConnectedNodeReq),
     Broadcast(BroadcastReq),
+    SingleTxReq(SingleTxReq),
     GetPeerCount(GetPeerCountReq),
 }
 
@@ -233,6 +238,7 @@ impl NodesManagerMessage {
             NodesManagerMessage::AddConnectedNodeReq(req) => req.handle(service),
             NodesManagerMessage::DelConnectedNodeReq(req) => req.handle(service),
             NodesManagerMessage::Broadcast(req) => req.handle(service),
+            NodesManagerMessage::SingleTxReq(req) => req.handle(service),
             NodesManagerMessage::GetPeerCount(req) => req.handle(service),
         }
     }
@@ -367,6 +373,34 @@ impl BroadcastReq {
             .clone()
             .unwrap()
             .send_message(None, 1, buf.to_vec());
+    }
+}
+
+pub struct SingleTxReq {
+    dst: SessionId,
+    key: String,
+    msg: ProtoMessage,
+}
+
+impl SingleTxReq {
+    pub fn new(dst: SessionId, key: String, msg: ProtoMessage) -> Self {
+        SingleTxReq {
+            dst,
+            key,
+            msg,
+        }
+    }
+
+    pub fn handle(self, service: &mut NodesManager) {
+        trace!("Send msg {:?} to {}, from key {}", self.msg, self.dst, self.key);
+        let msg_bytes: Vec<u8> = self.msg.try_into().unwrap();
+
+        let mut buf = BytesMut::with_capacity(4 + 4 + 1 + self.key.len() + msg_bytes.len());
+        pubsub_message_to_network_message(&mut buf, Some((self.key, msg_bytes)));
+        let _= service.service_ctrl
+            .clone()
+            .unwrap()
+            .send_message(Some(vec![self.dst]), 1, buf.to_vec());
     }
 }
 

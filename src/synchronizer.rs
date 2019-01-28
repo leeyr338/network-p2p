@@ -28,7 +28,7 @@ use std::u8;
 use crossbeam_channel;
 use crossbeam_channel::{ unbounded };
 use crate::mq_client::{ MqClient, PubMessage };
-use crate::node_manager::{ NodesManagerClient, BroadcastReq };
+use crate::node_manager::{ NodesManagerClient, BroadcastReq, SingleTxReq };
 
 const SYNC_STEP: u64 = 20;
 const SYNC_TIME_OUT: u64 = 9;
@@ -330,7 +330,8 @@ impl Synchronizer {
             sync_req.set_heights(heights);
             let msg = Message::init(OperateType::Single, origin, sync_req.into());
 
-            self.nodes_mgr_client.broadcast(BroadcastReq::new(
+            self.nodes_mgr_client.send_message(SingleTxReq::new(
+                origin as usize,
                 routing_key!(Synchronizer >> SyncRequest).into(),
                 msg
             ));
