@@ -14,7 +14,6 @@ use libproto::{
     Message as ProtoMessage,
     TryInto, TryFrom
 };
-use crossbeam_channel;
 use bytes::BytesMut;
 use tokio::codec::length_delimited::LengthDelimitedCodec;
 use crate::network::{ NetworkClient, RemoteMessage };
@@ -97,9 +96,5 @@ impl ServiceProtocol for TransferProtocol {
             },
             None => (),
         }
-    }
-
-    fn notify(&mut self, _control: &mut ServiceContext, token: u64) {
-        info!("[notify] proto [{}] received notify, token: {}", self.proto_id, token);
     }
 }

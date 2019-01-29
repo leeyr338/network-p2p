@@ -1,9 +1,5 @@
 
-
 use log::{debug, warn};
-use std::{
-    collections::HashMap,
-};
 use futures::{
     prelude::*,
     sync::mpsc::{channel, Sender},
@@ -75,34 +71,11 @@ impl AddressManager for NodesAddressManager {
     }
 }
 
-#[derive(Clone)]
-struct SessionData {
-    ty: SessionType,
-    address: Multiaddr,
-    data: Vec<Vec<u8>>,
-}
-
-impl SessionData {
-    fn new(address: Multiaddr, ty: SessionType) -> Self {
-        SessionData {
-            ty,
-            address,
-            data: Vec::new(),
-        }
-    }
-
-    fn push_data(&mut self, data: Vec<u8>) {
-        self.data.push(data);
-    }
-}
-
 pub struct DiscoveryProtocol {
     id: usize,
-    notify_counter: u32,
     discovery: Option<Discovery<NodesAddressManager>>,
     discovery_handle: DiscoveryHandle,
     discovery_senders: FnvHashMap<SessionId, Sender<Vec<u8>>>,
-    sessions: HashMap<SessionId, SessionData>,
 }
 
 impl ServiceProtocol for DiscoveryProtocol {
@@ -134,9 +107,6 @@ impl ServiceProtocol for DiscoveryProtocol {
 
     // open a discovery protocol session?
     fn connected(&mut self, control: &mut ServiceContext, session: &SessionContext, _: &str) {
-        self.sessions
-            .entry(session.id)
-            .or_insert(SessionData::new(session.address.clone(), session.ty));
         debug!(
             "protocol [discovery] open session [{}], address: [{}], type: [{:?}]",
             session.id, session.address, session.ty
@@ -173,17 +143,12 @@ impl ServiceProtocol for DiscoveryProtocol {
     }
 
     fn disconnected(&mut self, _control: &mut ServiceContext, session: &SessionContext) {
-        self.sessions.remove(&session.id);
         self.discovery_senders.remove(&session.id);
         debug!("protocol [discovery] close on session [{}]", session.id);
     }
 
     fn received(&mut self, _control: &mut ServiceContext, session: &SessionContext, data: Vec<u8>) {
         debug!("[received message]: length={}", data.len());
-        self.sessions
-            .get_mut(&session.id)
-            .unwrap()
-            .push_data(data.clone());
         if let Some(ref mut sender) = self.discovery_senders.get_mut(&session.id) {
             if let Err(err) = sender.try_send(data) {
                 if err.is_full() {
@@ -196,11 +161,6 @@ impl ServiceProtocol for DiscoveryProtocol {
             }
         }
 
-    }
-
-    fn notify(&mut self, _control: &mut ServiceContext, token: u64) {
-        debug!("protocol [discovery] received notify token: {}", token);
-        self.notify_counter += 1;
     }
 }
 
@@ -233,11 +193,9 @@ impl ProtocolMeta<LengthDelimitedCodec> for DiscoveryProtocolMeta {
 
         let handle = Box::new(DiscoveryProtocol {
             id: self.id,
-            notify_counter: 0,
             discovery: Some(discovery),
             discovery_handle,
             discovery_senders: FnvHashMap::default(),
-            sessions: HashMap::default(),
         });
 
         Some(handle)

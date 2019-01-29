@@ -7,7 +7,6 @@ pub mod citaprotocol;
 pub mod mq_client;
 pub mod synchronizer;
 
-use env_logger;
 use clap::App;
 use dotenv;
 use log::{ debug, trace, info };

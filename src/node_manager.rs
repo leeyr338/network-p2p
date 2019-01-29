@@ -104,7 +104,7 @@ impl NodesManager {
         self.nodes_manager_client.clone()
     }
 
-    pub fn dial_nodes(&self) {
+    pub fn dial_nodes(&mut self) {
         // FIXME: If there are no addrs in known_addrs, dial a default node.
         debug!("=============================");
         for raw_addr in self.known_addrs.keys() {
@@ -121,9 +121,8 @@ impl NodesManager {
                 if false == self.connected_addrs.values().any(|value| *value == *key) {
                     debug!("[dial_nodes] Connect to {:?}", key.socket_addr());
 
-                    // FIXME: Do not use ctrl.clone later.
-                    if let Some(ctrl) = &self.service_ctrl {
-                        match ctrl.clone().dial(key.socket_addr().to_multiaddr().unwrap()) {
+                    if let Some(ref mut ctrl) = self.service_ctrl {
+                        match ctrl.dial(key.socket_addr().to_multiaddr().unwrap()) {
                             Ok(_) => {
                                 debug!("[dial_nodes] Dail success");
                             }
@@ -369,10 +368,9 @@ impl BroadcastReq {
 
         let mut buf = BytesMut::with_capacity(4 + 4 + 1 + self.key.len() + msg_bytes.len());
         pubsub_message_to_network_message(&mut buf, Some((self.key, msg_bytes)));
-        let _= service.service_ctrl
-            .clone()
-            .unwrap()
-            .send_message(None, 1, buf.to_vec());
+        if let Some(ref mut ctrl) = service.service_ctrl {
+            let _ = ctrl.send_message(None, 1, buf.to_vec());
+        }
     }
 }
 
@@ -397,10 +395,11 @@ impl SingleTxReq {
 
         let mut buf = BytesMut::with_capacity(4 + 4 + 1 + self.key.len() + msg_bytes.len());
         pubsub_message_to_network_message(&mut buf, Some((self.key, msg_bytes)));
-        let _= service.service_ctrl
-            .clone()
-            .unwrap()
-            .send_message(Some(vec![self.dst]), 1, buf.to_vec());
+        if let Some(ref mut ctrl) = service.service_ctrl {
+
+            //FIXME: handle the error!
+            let _ = ctrl.send_message(Some(vec![self.dst]), 1, buf.to_vec());
+        }
     }
 }
 

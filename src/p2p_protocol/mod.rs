@@ -2,8 +2,6 @@
 
 use log::{debug, warn};
 
-use crossbeam_channel;
-
 use p2p::{
     SessionType,
     context::{
@@ -40,7 +38,6 @@ impl SHandle {
 }
 
 impl ServiceHandle for SHandle {
-
     fn handle_error(&mut self, _env: &mut ServiceContext, error: ServiceError) {
         debug!("return error {:?}", error);
         match error {
