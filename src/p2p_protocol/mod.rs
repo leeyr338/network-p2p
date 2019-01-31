@@ -61,7 +61,10 @@ impl ServiceHandle for SHandle {
                     }
                 }
             },
-            _ => (),
+            ServiceError::ListenError { address, error } => {
+                let address = multiaddr_to_socketaddr(&address).unwrap();
+                warn!("Listen error on {:?}, error info: {:?}", address, error);
+            },
         }
     }
 

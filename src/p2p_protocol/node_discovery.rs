@@ -47,7 +47,7 @@ impl AddressManager for NodesAddressManager {
         let req = AddNodeReq::new(address);
         self.nodes_mgr_client.add_node(req);
 
-        debug!("[add_new] Add node {:?}:{} to manager", address, address.port());
+        debug!("[add_new] Add node {:?} to manager", address);
     }
 
     fn misbehave(&mut self, _addr: Multiaddr, _ty: u64) -> i32 {
@@ -94,7 +94,6 @@ impl ServiceProtocol for DiscoveryProtocol {
                     })
                     .map_err(|err| {
                         warn!("discovery stream error: {:?}", err);
-                        ()
                     })
                     .then(|_| {
                         warn!("End of discovery");

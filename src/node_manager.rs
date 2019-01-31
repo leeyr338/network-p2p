@@ -29,13 +29,10 @@ use libproto::{
 };
 
 use crate::config::{
-    NetConfig, NodeConfig,
+    NetConfig,
 };
 use crate::citaprotocol::pubsub_message_to_network_message;
 
-
-pub const DEFAULT_KNOWN_IP: &str = "127.0.0.1";
-pub const DEFAULT_KNOWN_PORT: usize = 1337;
 pub const DEFAULT_MAX_CONNECTS: usize = 4;
 pub const DEFAULT_PORT: usize = 4000;
 pub const CHECK_CONNECTED_NODES: Duration = Duration::from_secs(3);
@@ -57,21 +54,21 @@ impl NodesManager {
         node_mgr
     }
 
-    // FIXME: handle the error
+    // The [[known_nodes]] 'MUST' be config, Otherwise leads a panic,
+    // and cannot setup network service.
     pub fn from_config(cfg: NetConfig) -> Self {
         let mut node_mgr = NodesManager::default();
 
         let cfg_addrs = cfg.known_nodes
-            .unwrap_or(vec!(NodeConfig {
-                ip: Some(DEFAULT_KNOWN_IP.to_owned()),
-                port: Some(DEFAULT_KNOWN_PORT),
-            }));
+            .expect("[NodesManager] known_nodes MUST be config in a network config file.");
 
-        let max_connects = cfg.max_connects.unwrap();
+        let max_connects = cfg.max_connects.unwrap_or(DEFAULT_MAX_CONNECTS);
         node_mgr.max_connects = max_connects;
 
         for addr in cfg_addrs {
-            let addr_str = format!("{}:{}", addr.ip.unwrap(), addr.port.unwrap());
+            let ip = addr.ip.expect("[NodeManager] ip 'MUST' be set in known_nodes.");
+            let port = addr.port.expect("[NodeManager] port 'MUST' be set in known_nodes.");
+            let addr_str = format!("{}:{}", ip, port);
             let socket_addr = SocketAddr::from_str(&addr_str).unwrap();
             let raw_addr = RawAddr::from(socket_addr);
             node_mgr.known_addrs.insert(raw_addr, 100);
@@ -105,7 +102,6 @@ impl NodesManager {
     }
 
     pub fn dial_nodes(&mut self) {
-        // FIXME: If there are no addrs in known_addrs, dial a default node.
         debug!("=============================");
         for raw_addr in self.known_addrs.keys() {
             debug!("Node in known: {:?}", raw_addr.socket_addr());
