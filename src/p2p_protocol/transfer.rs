@@ -85,16 +85,13 @@ impl ServiceProtocol for TransferProtocol {
 
     fn received(&mut self, _env: &mut ServiceContext, session: &SessionContext, data: Vec<u8>) {
         let mut data = BytesMut::from(data);
-        match network_message_to_pubsub_message(&mut data) {
-            Some((key, message)) => {
-                let mut msg = ProtoMessage::try_from(&message).unwrap();
-                msg.set_origin(session.id.clone() as u32);
-                self.network_client.handle_remote_message(RemoteMessage::new(
-                    key,
-                    msg.try_into().unwrap()
-                ));
-            },
-            None => (),
+        if let Some((key, message)) = network_message_to_pubsub_message(&mut data) {
+            let mut msg = ProtoMessage::try_from(&message).unwrap();
+            msg.set_origin(session.id as u32);
+            self.network_client.handle_remote_message(RemoteMessage::new(
+                key,
+                msg.try_into().unwrap()
+            ));
         }
     }
 }

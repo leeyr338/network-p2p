@@ -118,7 +118,7 @@ impl NodesManager {
 
         if self.connected_addrs.len() < self.max_connects {
             for key in self.known_addrs.keys() {
-                if false == self.connected_addrs.values().any(|value| *value == *key) {
+                if !self.connected_addrs.values().any(|value| *value == *key) {
                     debug!("[dial_nodes] Connect to {:?}", key.socket_addr());
 
                     if let Some(ref mut ctrl) = self.service_ctrl {
