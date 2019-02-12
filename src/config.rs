@@ -1,6 +1,5 @@
-
-use util::parse_config;
 use serde_derive::Deserialize;
+use util::parse_config;
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct NetConfig {

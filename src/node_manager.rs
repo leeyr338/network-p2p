@@ -1,37 +1,19 @@
-
-use log::{debug, warn, trace};
-use std::{
-    net::{ SocketAddr },
-    collections::HashMap,
-    time::{ Duration, Instant },
-    str::FromStr,
-
-};
+use crate::citaprotocol::pubsub_message_to_network_message;
+use crate::config::NetConfig;
 use bytes::BytesMut;
 use crossbeam_channel;
-use crossbeam_channel::{
-    unbounded, tick, select,
-};
+use crossbeam_channel::{select, tick, unbounded};
+use discovery::RawAddr;
 use fnv::FnvHashMap;
-use discovery::{RawAddr};
-use p2p::{
-    SessionId,
-    context::{
-        ServiceControl,
-    },
-    multiaddr::{
-        ToMultiaddr
-    },
+use libproto::{Message as ProtoMessage, TryInto};
+use log::{debug, trace, warn};
+use p2p::{context::ServiceControl, multiaddr::ToMultiaddr, SessionId};
+use std::{
+    collections::HashMap,
+    net::SocketAddr,
+    str::FromStr,
+    time::{Duration, Instant},
 };
-use libproto::{
-    Message as ProtoMessage,
-    TryInto,
-};
-
-use crate::config::{
-    NetConfig,
-};
-use crate::citaprotocol::pubsub_message_to_network_message;
 
 pub const DEFAULT_MAX_CONNECTS: usize = 4;
 pub const DEFAULT_PORT: usize = 4000;
@@ -59,15 +41,20 @@ impl NodesManager {
     pub fn from_config(cfg: NetConfig) -> Self {
         let mut node_mgr = NodesManager::default();
 
-        let cfg_addrs = cfg.known_nodes
+        let cfg_addrs = cfg
+            .known_nodes
             .expect("[NodesManager] known_nodes MUST be config in a network config file.");
 
         let max_connects = cfg.max_connects.unwrap_or(DEFAULT_MAX_CONNECTS);
         node_mgr.max_connects = max_connects;
 
         for addr in cfg_addrs {
-            let ip = addr.ip.expect("[NodeManager] ip 'MUST' be set in known_nodes.");
-            let port = addr.port.expect("[NodeManager] port 'MUST' be set in known_nodes.");
+            let ip = addr
+                .ip
+                .expect("[NodeManager] ip 'MUST' be set in known_nodes.");
+            let port = addr
+                .port
+                .expect("[NodeManager] port 'MUST' be set in known_nodes.");
             let addr_str = format!("{}:{}", ip, port);
             let socket_addr = SocketAddr::from_str(&addr_str).unwrap();
             let raw_addr = RawAddr::from(socket_addr);
@@ -75,7 +62,6 @@ impl NodesManager {
         }
 
         node_mgr
-
     }
 
     pub fn run(&mut self) {
@@ -93,7 +79,6 @@ impl NodesManager {
                     self.dial_nodes();
                 }
             }
-
         }
     }
 
@@ -163,9 +148,7 @@ pub struct NodesManagerClient {
 
 impl NodesManagerClient {
     pub fn new(sender: crossbeam_channel::Sender<NodesManagerMessage>) -> Self {
-        NodesManagerClient {
-            sender,
-        }
+        NodesManagerClient { sender }
     }
 
     pub fn add_node(&self, req: AddNodeReq) {
@@ -245,13 +228,14 @@ pub struct AddNodeReq {
 
 impl AddNodeReq {
     pub fn new(addr: SocketAddr) -> Self {
-        AddNodeReq {
-            addr,
-        }
+        AddNodeReq { addr }
     }
 
     pub fn handle(self, service: &mut NodesManager) {
-        service.known_addrs.entry(RawAddr::from(self.addr)).or_insert(100);
+        service
+            .known_addrs
+            .entry(RawAddr::from(self.addr))
+            .or_insert(100);
     }
 }
 
@@ -261,9 +245,7 @@ pub struct DelNodeReq {
 
 impl DelNodeReq {
     pub fn new(addr: SocketAddr) -> Self {
-        DelNodeReq {
-            addr,
-        }
+        DelNodeReq { addr }
     }
 
     pub fn handle(self, service: &mut NodesManager) {
@@ -277,10 +259,7 @@ pub struct GetRandomNodesReq {
 }
 
 impl GetRandomNodesReq {
-    pub fn new(
-        num: usize,
-        return_channel: crossbeam_channel::Sender<Vec<SocketAddr>>,
-    ) -> Self {
+    pub fn new(num: usize, return_channel: crossbeam_channel::Sender<Vec<SocketAddr>>) -> Self {
         GetRandomNodesReq {
             num,
             return_channel,
@@ -288,7 +267,8 @@ impl GetRandomNodesReq {
     }
 
     pub fn handle(self, service: &mut NodesManager) {
-        let addrs = service.known_addrs
+        let addrs = service
+            .known_addrs
             .keys()
             .take(self.num)
             .map(|addr| addr.socket_addr())
@@ -311,20 +291,15 @@ pub struct AddConnectedNodeReq {
 }
 
 impl AddConnectedNodeReq {
-    pub fn new(
-        addr: SocketAddr,
-        session_id: SessionId,
-    ) -> Self {
-        AddConnectedNodeReq {
-            addr,
-            session_id,
-        }
+    pub fn new(addr: SocketAddr, session_id: SessionId) -> Self {
+        AddConnectedNodeReq { addr, session_id }
     }
 
     pub fn handle(self, service: &mut NodesManager) {
-
         // FIXME: If have reached to max_connects, disconnected this node.
-        service.connected_addrs.insert(self.session_id, RawAddr::from(self.addr));
+        service
+            .connected_addrs
+            .insert(self.session_id, RawAddr::from(self.addr));
     }
 }
 
@@ -334,9 +309,7 @@ pub struct DelConnectedNodeReq {
 
 impl DelConnectedNodeReq {
     pub fn new(session_id: SessionId) -> Self {
-        DelConnectedNodeReq {
-            session_id,
-        }
+        DelConnectedNodeReq { session_id }
     }
 
     pub fn handle(self, service: &mut NodesManager) {
@@ -352,14 +325,11 @@ pub struct BroadcastReq {
 
 impl BroadcastReq {
     pub fn new(key: String, msg: ProtoMessage) -> Self {
-        BroadcastReq {
-            key,
-            msg,
-        }
+        BroadcastReq { key, msg }
     }
 
     pub fn handle(self, service: &mut NodesManager) {
-         trace!("Broadcast msg {:?}, from key {}", self.msg, self.key);
+        trace!("Broadcast msg {:?}, from key {}", self.msg, self.key);
         let msg_bytes: Vec<u8> = self.msg.try_into().unwrap();
 
         let mut buf = BytesMut::with_capacity(4 + 4 + 1 + self.key.len() + msg_bytes.len());
@@ -378,21 +348,21 @@ pub struct SingleTxReq {
 
 impl SingleTxReq {
     pub fn new(dst: SessionId, key: String, msg: ProtoMessage) -> Self {
-        SingleTxReq {
-            dst,
-            key,
-            msg,
-        }
+        SingleTxReq { dst, key, msg }
     }
 
     pub fn handle(self, service: &mut NodesManager) {
-        trace!("Send msg {:?} to {}, from key {}", self.msg, self.dst, self.key);
+        trace!(
+            "Send msg {:?} to {}, from key {}",
+            self.msg,
+            self.dst,
+            self.key
+        );
         let msg_bytes: Vec<u8> = self.msg.try_into().unwrap();
 
         let mut buf = BytesMut::with_capacity(4 + 4 + 1 + self.key.len() + msg_bytes.len());
         pubsub_message_to_network_message(&mut buf, Some((self.key, msg_bytes)));
         if let Some(ref mut ctrl) = service.service_ctrl {
-
             //FIXME: handle the error!
             let _ = ctrl.send_message(Some(vec![self.dst]), 1, buf.to_vec());
         }
@@ -405,9 +375,7 @@ pub struct GetPeerCountReq {
 
 impl GetPeerCountReq {
     pub fn new(return_channel: crossbeam_channel::Sender<usize>) -> Self {
-        GetPeerCountReq {
-            return_channel,
-        }
+        GetPeerCountReq { return_channel }
     }
 
     pub fn handle(self, service: &mut NodesManager) {
@@ -418,7 +386,10 @@ impl GetPeerCountReq {
                 debug!("Get peer count and send it success");
             }
             Err(err) => {
-                warn!("Get peer count {}, but send it failed : {:?}", peer_count, err);
+                warn!(
+                    "Get peer count {}, but send it failed : {:?}",
+                    peer_count, err
+                );
             }
         }
     }

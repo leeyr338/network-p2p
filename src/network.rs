@@ -1,24 +1,17 @@
-
-use log::{ debug, trace, error, info, warn };
+use crate::mq_client::{MqClient, PubMessage};
+use crate::node_manager::{BroadcastReq, GetPeerCountReq, NodesManagerClient};
+use crate::synchronizer::{SynchronizerClient, SynchronizerMessage};
 use crossbeam_channel;
-use crossbeam_channel::{
-    unbounded,
-};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use libproto::router::{
-    RoutingKey, MsgType, SubModules,
-};
+use crossbeam_channel::unbounded;
+use libproto::router::{MsgType, RoutingKey, SubModules};
 use libproto::routing_key;
-use libproto::{
-    Message as ProtoMessage,
-    Response,
-};
+use libproto::snapshot::{Cmd, Resp, SnapshotResp};
+use libproto::{Message as ProtoMessage, Response};
 use libproto::{TryFrom, TryInto};
-use libproto::snapshot::{ Cmd, Resp, SnapshotResp };
-use crate::mq_client::{ MqClient, PubMessage };
-use crate::node_manager::{ NodesManagerClient, BroadcastReq, GetPeerCountReq };
-use crate::synchronizer::{ SynchronizerClient, SynchronizerMessage };
+use log::{debug, error, info, trace, warn};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
 pub struct Network {
     is_pause: Arc<AtomicBool>,
     mq_client: MqClient,
@@ -35,7 +28,7 @@ impl Network {
         sync_client: SynchronizerClient,
     ) -> Self {
         let (tx, rx) = unbounded();
-        let client = NetworkClient{ sender: tx };
+        let client = NetworkClient { sender: tx };
         Network {
             is_pause: Arc::new(AtomicBool::new(false)),
             mq_client,
@@ -66,9 +59,7 @@ pub struct NetworkClient {
 
 impl NetworkClient {
     pub fn new(sender: crossbeam_channel::Sender<NetworkMessage>) -> Self {
-        NetworkClient {
-            sender,
-        }
+        NetworkClient { sender }
     }
 
     pub fn handle_local_message(&self, msg: LocalMessage) {
@@ -111,44 +102,42 @@ pub struct LocalMessage {
 
 impl LocalMessage {
     pub fn new(key: String, data: Vec<u8>) -> Self {
-        LocalMessage {
-            key,
-            data,
-        }
+        LocalMessage { key, data }
     }
 
     pub fn handle(self, service: &mut Network) {
         let rt_key = RoutingKey::from(&self.key);
         trace!("Network receive Message from Local/{}", self.key);
 
-        if service.is_pause.load(Ordering::SeqCst) && rt_key.get_sub_module() != SubModules::Snapshot {
+        if service.is_pause.load(Ordering::SeqCst)
+            && rt_key.get_sub_module() != SubModules::Snapshot
+        {
             return;
         }
 
         match rt_key {
             routing_key!(Chain >> Status) => {
-                service.sync_client.handle_local_status(SynchronizerMessage::new(
-                    self.key,
-                    self.data
-                ));
-            },
+                service
+                    .sync_client
+                    .handle_local_status(SynchronizerMessage::new(self.key, self.data));
+            }
             routing_key!(Chain >> SyncResponse) => {
                 let msg = ProtoMessage::try_from(&self.data).unwrap();
                 service.nodes_mgr_client.broadcast(BroadcastReq::new(
                     routing_key!(Synchronizer >> SyncResponse).into(),
-                    msg
+                    msg,
                 ));
-            },
+            }
             routing_key!(Jsonrpc >> RequestNet) => {
                 self.reply_rpc(&self.data, service);
-            },
+            }
             routing_key!(Snapshot >> SnapshotReq) => {
                 info!("Set disconnect and response");
                 self.snapshot_req(&self.data, service);
-            },
+            }
             _ => {
                 error!("Unexpected key {} from Local", self.key);
-            },
+            }
         }
     }
 
@@ -158,14 +147,15 @@ impl LocalMessage {
         let req_opt = msg.take_request();
         {
             if let Some(mut req) = req_opt {
-
                 // Get peer count and send back to JsonRpc from MQ
                 if req.has_peercount() {
                     let mut response = Response::new();
                     response.set_request_id(req.take_request_id());
 
                     let (tx, rx) = unbounded();
-                    service.nodes_mgr_client.get_peer_count(GetPeerCountReq::new(tx));
+                    service
+                        .nodes_mgr_client
+                        .get_peer_count(GetPeerCountReq::new(tx));
 
                     // Get peer count from rx channel
                     // FIXME: This is a block receive, double check about this
@@ -174,7 +164,7 @@ impl LocalMessage {
                     let msg: ProtoMessage = response.into();
                     service.mq_client.send_peer_count(PubMessage::new(
                         routing_key!(Net >> Response).into(),
-                        msg.try_into().unwrap()
+                        msg.try_into().unwrap(),
                     ));
                 }
             } else {
@@ -192,38 +182,37 @@ impl LocalMessage {
         match req.cmd {
             Cmd::Snapshot => {
                 info!("[snapshot] receive cmd: Snapshot");
-            },
+            }
             Cmd::Begin => {
                 info!("[snapshot] receive cmd: Begin");
                 service.is_pause.store(true, Ordering::SeqCst);
                 resp.set_resp(Resp::BeginAck);
                 resp.set_flag(true);
                 send = true;
-            },
+            }
             Cmd::Restore => {
                 info!("[snapshot] receive cmd: Restore");
-            },
+            }
             Cmd::Clear => {
                 info!("[snapshot] receive cmd: Clear");
                 resp.set_resp(Resp::ClearAck);
                 resp.set_flag(true);
                 send = true;
-
-            },
+            }
             Cmd::End => {
                 info!("[snapshot] receive cmd: End");
                 service.is_pause.store(false, Ordering::SeqCst);
                 resp.set_resp(Resp::EndAck);
                 resp.set_flag(true);
                 send = true;
-            },
+            }
         }
 
         if send {
             let msg: ProtoMessage = resp.into();
             service.mq_client.send_snapshot_resp(PubMessage::new(
                 routing_key!(Net >> SnapshotResp).into(),
-                (&msg).try_into().unwrap()
+                (&msg).try_into().unwrap(),
             ));
         }
     }
@@ -236,77 +225,60 @@ pub struct RemoteMessage {
 
 impl RemoteMessage {
     pub fn new(key: String, data: Vec<u8>) -> Self {
-        RemoteMessage {
-            key,
-            data,
-        }
+        RemoteMessage { key, data }
     }
 
     pub fn handle(self, service: &mut Network) {
         let rt_key = RoutingKey::from(&self.key);
         trace!("Network receive Message from Remote/{}", self.key);
 
-        if service.is_pause.load(Ordering::SeqCst) && rt_key.get_sub_module() != SubModules::Snapshot {
+        if service.is_pause.load(Ordering::SeqCst)
+            && rt_key.get_sub_module() != SubModules::Snapshot
+        {
             return;
         }
 
         match rt_key {
             routing_key!(Synchronizer >> Status) => {
-                service.sync_client.handle_remote_status(SynchronizerMessage::new(
-                    self.key,
-                    self.data
-                ));
+                service
+                    .sync_client
+                    .handle_remote_status(SynchronizerMessage::new(self.key, self.data));
             }
             routing_key!(Synchronizer >> SyncResponse) => {
-                service.sync_client.handle_remote_response(SynchronizerMessage::new(
-                    self.key,
-                    self.data
-                ));
-            },
+                service
+                    .sync_client
+                    .handle_remote_response(SynchronizerMessage::new(self.key, self.data));
+            }
             routing_key!(Synchronizer >> SyncRequest) => {
                 service.mq_client.pub_sync_request(PubMessage::new(
                     routing_key!(Net >> SyncRequest).into(),
-                    self.data
+                    self.data,
                 ));
-            },
+            }
             routing_key!(Consensus >> CompactSignedProposal) => {
-                let msg = PubMessage::new(
-                    routing_key!(Net >> CompactSignedProposal).into(),
-                    self.data,
-                );
+                let msg =
+                    PubMessage::new(routing_key!(Net >> CompactSignedProposal).into(), self.data);
                 service.mq_client.forward_msg_to_consensus(msg);
-            },
+            }
             routing_key!(Consensus >> RawBytes) => {
-                let msg = PubMessage::new(
-                    routing_key!(Net >> RawBytes).into(),
-                    self.data,
-                );
+                let msg = PubMessage::new(routing_key!(Net >> RawBytes).into(), self.data);
                 service.mq_client.forward_msg_to_consensus(msg);
-            },
+            }
             routing_key!(Auth >> Request) => {
-                let msg = PubMessage::new(
-                    routing_key!(Net >> Request).into(),
-                    self.data,
-                );
+                let msg = PubMessage::new(routing_key!(Net >> Request).into(), self.data);
                 service.mq_client.forward_msg_to_auth(msg);
-            },
+            }
             routing_key!(Auth >> GetBlockTxn) => {
-                let msg = PubMessage::new(
-                    routing_key!(Net >> GetBlockTxn).into(),
-                    self.data,
-                );
+                let msg = PubMessage::new(routing_key!(Net >> GetBlockTxn).into(), self.data);
                 service.mq_client.forward_msg_to_auth(msg);
-            },
+            }
             routing_key!(Auth >> BlockTxn) => {
-                let msg = PubMessage::new(
-                    routing_key!(Net >> BlockTxn).into(),
-                    self.data,
-                );
+                let msg = PubMessage::new(routing_key!(Net >> BlockTxn).into(), self.data);
                 service.mq_client.forward_msg_to_auth(msg);
-            },
+            }
             _ => {
                 error!("Unexpected key {} from Remote", self.key);
-            },
+            }
         }
     }
 }

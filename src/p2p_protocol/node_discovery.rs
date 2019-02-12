@@ -1,33 +1,22 @@
-
-use log::{debug, warn};
+use crate::node_manager::{AddNodeReq, GetRandomNodesReq, NodesManagerClient};
+use crossbeam_channel;
+use crossbeam_channel::unbounded;
+use discovery::{AddressManager, Direction, Discovery, DiscoveryHandle, Substream};
+use fnv::FnvHashMap;
 use futures::{
     prelude::*,
     sync::mpsc::{channel, Sender},
 };
-use crossbeam_channel;
-use crossbeam_channel::{
-    unbounded,
-};
-use fnv::FnvHashMap;
-use tokio::codec::length_delimited::LengthDelimitedCodec;
-use discovery::{AddressManager, Discovery, DiscoveryHandle, Direction, Substream};
+use log::{debug, warn};
 use p2p::{
-    ProtocolId, SessionId, SessionType,
-    context::{
-        ServiceContext, SessionContext,
-    },
-    multiaddr::{
-        Multiaddr, ToMultiaddr
-    },
-    traits::{
-        ProtocolMeta, ServiceProtocol,
-    },
+    context::{ServiceContext, SessionContext},
+    multiaddr::{Multiaddr, ToMultiaddr},
+    traits::{ProtocolMeta, ServiceProtocol},
     utils::multiaddr_to_socketaddr,
+    ProtocolId, SessionId, SessionType,
 };
+use tokio::codec::length_delimited::LengthDelimitedCodec;
 
-use crate::node_manager::{
-    NodesManagerClient, AddNodeReq, GetRandomNodesReq,
-};
 #[derive(Clone, Debug)]
 pub struct NodesAddressManager {
     pub nodes_mgr_client: NodesManagerClient,
@@ -35,9 +24,7 @@ pub struct NodesAddressManager {
 
 impl NodesAddressManager {
     pub fn new(nodes_mgr_client: NodesManagerClient) -> Self {
-        NodesAddressManager {
-            nodes_mgr_client,
-        }
+        NodesAddressManager { nodes_mgr_client }
     }
 }
 
@@ -67,7 +54,6 @@ impl AddressManager for NodesAddressManager {
         ret.into_iter()
             .map(|addr| addr.to_multiaddr().unwrap())
             .collect()
-
     }
 }
 
@@ -159,7 +145,6 @@ impl ServiceProtocol for DiscoveryProtocol {
                 }
             }
         }
-
     }
 }
 
@@ -170,10 +155,7 @@ pub struct DiscoveryProtocolMeta {
 
 impl DiscoveryProtocolMeta {
     pub fn new(id: ProtocolId, addr_mgr: NodesAddressManager) -> Self {
-        DiscoveryProtocolMeta {
-            id,
-            addr_mgr,
-        }
+        DiscoveryProtocolMeta { id, addr_mgr }
     }
 }
 

@@ -20,10 +20,10 @@
 use byteorder::{ByteOrder, NetworkEndian};
 use bytes::BufMut;
 use bytes::BytesMut;
+use log::{error, warn};
 use std::io;
 use std::str;
 use tokio::codec::{Decoder, Encoder};
-use log::{error, warn};
 
 pub type CitaRequest = (String, Vec<u8>);
 pub type CitaResponse = Option<(String, Vec<u8>)>;

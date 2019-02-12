@@ -1,55 +1,34 @@
-
-pub mod config;
-pub mod p2p_protocol;
-pub mod node_manager;
-pub mod network;
 pub mod citaprotocol;
+pub mod config;
 pub mod mq_client;
+pub mod network;
+pub mod node_manager;
+pub mod p2p_protocol;
 pub mod synchronizer;
 
+use crate::config::NetConfig;
+use crate::mq_client::MqClient;
+use crate::network::{LocalMessage, Network};
+use crate::node_manager::{BroadcastReq, NodesManager, DEFAULT_PORT};
+use crate::p2p_protocol::{
+    node_discovery::{DiscoveryProtocolMeta, NodesAddressManager},
+    transfer::TransferProtocolMeta,
+    SHandle,
+};
+use crate::synchronizer::Synchronizer;
 use clap::App;
 use dotenv;
-use log::{ debug, trace, info };
+use futures::prelude::*;
+use libproto::router::{MsgType, RoutingKey, SubModules};
+use libproto::routing_key;
+use libproto::{Message, TryFrom};
+use log::{debug, info, trace};
+use p2p::{builder::ServiceBuilder, SecioKeyPair};
+use pubsub::start_pubsub;
+use std::sync::mpsc::channel;
+use std::thread;
 use util::micro_service_init;
 use util::set_panic_handler;
-use futures::{
-    prelude::*,
-};
-use std::{
-    thread,
-};
-use std::sync::mpsc::channel;
-use pubsub::start_pubsub;
-use libproto::routing_key;
-use libproto::router::{MsgType, SubModules, RoutingKey};
-use libproto::{ Message, TryFrom };
-
-use p2p::{
-    builder::ServiceBuilder,
-    SecioKeyPair,
-};
-
-use crate::config::NetConfig;
-
-use crate::p2p_protocol::{
-    SHandle,
-    node_discovery::{
-        DiscoveryProtocolMeta, NodesAddressManager,
-    },
-    transfer::{
-        TransferProtocolMeta,
-    }
-};
-
-use crate::node_manager::{
-    NodesManager, DEFAULT_PORT, BroadcastReq,
-};
-
-use crate::network::{
-    Network, LocalMessage,
-};
-use crate::mq_client::MqClient;
-use crate::synchronizer::Synchronizer;
 
 include!(concat!(env!("OUT_DIR"), "/build_info.rs"));
 
@@ -112,11 +91,7 @@ fn main() {
         ctx_sub,
         crx_pub,
     );
-    let mq_client = MqClient::new(
-        ctx_pub_auth,
-        ctx_pub_consensus,
-        ctx_pub
-    );
+    let mq_client = MqClient::new(ctx_pub_auth, ctx_pub_consensus, ctx_pub);
     // <<<< End init pubsub
 
     // >>>> Init p2p protocols
@@ -125,12 +100,10 @@ fn main() {
     let mut network_mgr = Network::new(
         mq_client.clone(),
         nodes_mgr.client(),
-        synchronizer_mgr.client()
+        synchronizer_mgr.client(),
     );
-    let discovery_meta = DiscoveryProtocolMeta::new(
-        0,
-        NodesAddressManager::new(nodes_mgr.client())
-    );
+    let discovery_meta =
+        DiscoveryProtocolMeta::new(0, NodesAddressManager::new(nodes_mgr.client()));
     let transfer_meta = TransferProtocolMeta::new(1, network_mgr.client());
 
     let mut service = ServiceBuilder::default()
@@ -162,7 +135,7 @@ fn main() {
         let msg = Message::try_from(&body).unwrap();
 
         // Broadcast the message to other nodes
-        nodes_manager_client.broadcast(BroadcastReq::new(key,msg));
+        nodes_manager_client.broadcast(BroadcastReq::new(key, msg));
     });
 
     let network_client = network_mgr.client();

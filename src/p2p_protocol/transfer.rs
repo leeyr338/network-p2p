@@ -1,23 +1,14 @@
-
-use log::{ info };
-use p2p::{
-    ProtocolId,
-    traits::{
-        ProtocolMeta, ServiceProtocol,
-    },
-    context::{
-        ServiceContext, SessionContext,
-    },
-    SessionId,
-};
-use libproto::{
-    Message as ProtoMessage,
-    TryInto, TryFrom
-};
-use bytes::BytesMut;
-use tokio::codec::length_delimited::LengthDelimitedCodec;
-use crate::network::{ NetworkClient, RemoteMessage };
 use crate::citaprotocol::network_message_to_pubsub_message;
+use crate::network::{NetworkClient, RemoteMessage};
+use bytes::BytesMut;
+use libproto::{Message as ProtoMessage, TryFrom, TryInto};
+use log::info;
+use p2p::{
+    context::{ServiceContext, SessionContext},
+    traits::{ProtocolMeta, ServiceProtocol},
+    ProtocolId, SessionId,
+};
+use tokio::codec::length_delimited::LengthDelimitedCodec;
 
 pub struct TransferProtocolMeta {
     id: ProtocolId,
@@ -26,10 +17,7 @@ pub struct TransferProtocolMeta {
 
 impl TransferProtocolMeta {
     pub fn new(id: ProtocolId, network_client: NetworkClient) -> Self {
-        TransferProtocolMeta {
-            id,
-            network_client,
-        }
+        TransferProtocolMeta { id, network_client }
     }
 }
 
@@ -41,7 +29,7 @@ impl ProtocolMeta<LengthDelimitedCodec> for TransferProtocolMeta {
         LengthDelimitedCodec::new()
     }
     fn service_handle(&self) -> Option<Box<dyn ServiceProtocol + Send + 'static>> {
-        let handle = Box::new( TransferProtocol {
+        let handle = Box::new(TransferProtocol {
             proto_id: self.id,
             connected_session_ids: Vec::default(),
             network_client: self.network_client.clone(),
@@ -57,16 +45,23 @@ struct TransferProtocol {
 }
 
 impl ServiceProtocol for TransferProtocol {
-    fn init(&mut self, _control: &mut ServiceContext) {
+    fn init(&mut self, _control: &mut ServiceContext) {}
 
-    }
-
-    fn connected(&mut self, _control: &mut ServiceContext, session: &SessionContext, version: &str) {
-        info!("[connected] proto id [{}] open on session [{}], address: [{}], type: [{:?}], version: {}",
+    fn connected(
+        &mut self,
+        _control: &mut ServiceContext,
+        session: &SessionContext,
+        version: &str,
+    ) {
+        info!(
+            "[connected] proto id [{}] open on session [{}], address: [{}], type: [{:?}], version: {}",
             self.proto_id, session.id, session.address, session.ty, version
         );
         self.connected_session_ids.push(session.id);
-        info!("[connected] connected sessions: {:?}", self.connected_session_ids);
+        info!(
+            "[connected] connected sessions: {:?}",
+            self.connected_session_ids
+        );
     }
 
     fn disconnected(&mut self, _control: &mut ServiceContext, session: &SessionContext) {
@@ -78,7 +73,8 @@ impl ServiceProtocol for TransferProtocol {
             .collect();
         self.connected_session_ids = new_list;
 
-        info!("[disconnected] proto id [{}] close on session [{}]",
+        info!(
+            "[disconnected] proto id [{}] close on session [{}]",
             self.proto_id, session.id
         );
     }
@@ -88,10 +84,8 @@ impl ServiceProtocol for TransferProtocol {
         if let Some((key, message)) = network_message_to_pubsub_message(&mut data) {
             let mut msg = ProtoMessage::try_from(&message).unwrap();
             msg.set_origin(session.id as u32);
-            self.network_client.handle_remote_message(RemoteMessage::new(
-                key,
-                msg.try_into().unwrap()
-            ));
+            self.network_client
+                .handle_remote_message(RemoteMessage::new(key, msg.try_into().unwrap()));
         }
     }
 }

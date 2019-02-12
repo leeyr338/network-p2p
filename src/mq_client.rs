@@ -1,4 +1,3 @@
-
 use std::sync::mpsc::Sender;
 
 #[derive(Clone)]
@@ -53,10 +52,7 @@ pub struct PubMessage {
 }
 
 impl PubMessage {
-    pub fn new ( key: String, data: Vec<u8> ) -> Self {
-        PubMessage {
-            key,
-            data,
-        }
+    pub fn new(key: String, data: Vec<u8>) -> Self {
+        PubMessage { key, data }
     }
 }

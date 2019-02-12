@@ -14,21 +14,21 @@
 
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
-use log::{ debug, error, info, warn };
+use crate::mq_client::{MqClient, PubMessage};
+use crate::node_manager::{BroadcastReq, NodesManagerClient, SingleTxReq};
+use crossbeam_channel;
+use crossbeam_channel::unbounded;
 use libproto::blockchain::{Block, Status};
-use libproto::routing_key;
 use libproto::router::{MsgType, RoutingKey, SubModules};
+use libproto::routing_key;
 use libproto::{Message, OperateType, SyncRequest, SyncResponse};
 use libproto::{TryFrom, TryInto};
+use log::{debug, error, info, warn};
 use rand::{thread_rng, Rng, ThreadRng};
 use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::convert::Into;
 use std::time::{Duration, Instant};
 use std::u8;
-use crossbeam_channel;
-use crossbeam_channel::{ unbounded };
-use crate::mq_client::{ MqClient, PubMessage };
-use crate::node_manager::{ NodesManagerClient, BroadcastReq, SingleTxReq };
 
 const SYNC_STEP: u64 = 20;
 const SYNC_TIME_OUT: u64 = 9;
@@ -333,7 +333,7 @@ impl Synchronizer {
             self.nodes_mgr_client.send_message(SingleTxReq::new(
                 origin as usize,
                 routing_key!(Synchronizer >> SyncRequest).into(),
-                msg
+                msg,
             ));
         }
     }
@@ -348,7 +348,7 @@ impl Synchronizer {
 
         self.nodes_mgr_client.broadcast(BroadcastReq::new(
             routing_key!(Synchronizer >> Status).into(),
-            msg
+            msg,
         ));
     }
 
@@ -415,7 +415,7 @@ impl Synchronizer {
             let msg: Message = sync_res.into();
             self.mq_client.pub_sync_blocks(PubMessage::new(
                 routing_key!(Net >> SyncResponse).into(),
-                msg.try_into().unwrap()
+                msg.try_into().unwrap(),
             ));
         }
     }
@@ -460,9 +460,7 @@ pub struct SynchronizerClient {
 
 impl SynchronizerClient {
     pub fn new(sender: crossbeam_channel::Sender<SynchronizerMessage>) -> Self {
-        SynchronizerClient {
-            sender,
-        }
+        SynchronizerClient { sender }
     }
 
     pub fn handle_local_status(&self, msg: SynchronizerMessage) {
@@ -496,10 +494,7 @@ pub struct SynchronizerMessage {
 
 impl SynchronizerMessage {
     pub fn new(key: String, data: Vec<u8>) -> Self {
-       SynchronizerMessage {
-           key,
-           data,
-       }
+        SynchronizerMessage { key, data }
     }
 
     pub fn handle(self, service: &mut Synchronizer) {
