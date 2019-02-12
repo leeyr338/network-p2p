@@ -50,7 +50,14 @@ impl ServiceHandle for SHandle {
             }
             ServiceError::ListenError { address, error } => {
                 let address = multiaddr_to_socketaddr(&address).unwrap();
-                warn!("Listen error on {:?}, error info: {:?}", address, error);
+                warn!("[handle_error] Listen error on {:?}, error info: {:?}", address, error);
+            }
+            ServiceError::ProtocolError { id, proto_id, error } => {
+                // FIXME: handle protocol error later
+                warn!(
+                    "[handle_error] Protocol Error, stream id: {:?}, protocol id: {:?}, error: {:?}",
+                    id, proto_id, error
+                );
             }
         }
     }
