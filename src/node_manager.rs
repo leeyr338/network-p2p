@@ -36,14 +36,14 @@ impl NodesManager {
         node_mgr
     }
 
-    // The [[known_nodes]] 'MUST' be config, Otherwise leads a panic,
+    // The [[peers]] 'MUST' be config, Otherwise leads a panic,
     // and cannot setup network service.
     pub fn from_config(cfg: NetConfig) -> Self {
         let mut node_mgr = NodesManager::default();
 
         let cfg_addrs = cfg
-            .known_nodes
-            .expect("[NodesManager] known_nodes MUST be config in a network config file.");
+            .peers
+            .expect("[NodesManager] peers MUST be config in a network config file.");
 
         let max_connects = cfg.max_connects.unwrap_or(DEFAULT_MAX_CONNECTS);
         node_mgr.max_connects = max_connects;

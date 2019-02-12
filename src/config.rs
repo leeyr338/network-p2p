@@ -4,12 +4,13 @@ use util::parse_config;
 #[derive(Debug, Deserialize, Clone)]
 pub struct NetConfig {
     pub port: Option<usize>,
-    pub known_nodes: Option<Vec<NodeConfig>>,
+    pub peers: Option<Vec<PeerConfig>>,
     pub max_connects: Option<usize>,
+    pub enable_tls: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
-pub struct NodeConfig {
+pub struct PeerConfig {
     pub ip: Option<String>,
     pub port: Option<usize>,
 }
@@ -30,14 +31,14 @@ mod tests {
     fn basic_test() {
         let toml_str = r#"
         port = 4000
-
+        enable_tls = true
         max_connects = 4
-
-        [[known_nodes]]
+        id_card = 9
+        [[peers]]
             ip = "0.0.0.0"
             port = 4001
-
-        [[known_nodes]]
+            common_name = "test1.cita"
+        [[peers]]
             ip = "0.0.0.0"
             port = 4002
         "#;
@@ -49,6 +50,7 @@ mod tests {
 
         assert_eq!(config.port, Some(4000));
         assert_eq!(config.max_connects, Some(4));
-        assert_eq!(config.known_nodes.unwrap().len(), 2);
+        assert_eq!(config.enable_tls, Some(true));
+        assert_eq!(config.peers.unwrap().len(), 2);
     }
 }
